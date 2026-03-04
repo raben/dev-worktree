@@ -1,5 +1,5 @@
 class WtDev < Formula
-  desc "Worktree x devcontainer parallel development environment"
+  desc "Isolated parallel development environments with worktree + devcontainer"
   homepage "https://github.com/raben/wt-dev"
   head "https://github.com/raben/wt-dev.git", branch: "main"
   license "MIT"
@@ -11,6 +11,6 @@ class WtDev < Formula
   end
 
   test do
-    system "#{bin}/wt-port-registry", "--help"
+    system "#{bin}/dev", "--version"
   end
 end

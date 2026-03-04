@@ -2,15 +2,13 @@
 set -euo pipefail
 
 INSTALL_DIR="${1:-$HOME/.local/bin}"
+target="$INSTALL_DIR/dev"
 
-echo "Uninstalling wt-dev from $INSTALL_DIR ..."
+if [ -L "$target" ] || [ -e "$target" ]; then
+  rm "$target"
+  echo "Removed $target"
+else
+  echo "Not installed at $target"
+fi
 
-for name in wt-create wt-remove wt-list wt-port-registry; do
-  target="$INSTALL_DIR/$name"
-  if [ -L "$target" ] || [ -e "$target" ]; then
-    rm "$target"
-    echo "  Removed $name"
-  fi
-done
-
-echo "Uninstalled. State directory (~/.wt-dev/) was kept."
+echo "State directory (~/.wt-dev/) was kept."

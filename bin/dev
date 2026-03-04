@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# dev - Isolated parallel development environments
+# Usage: dev <command> [options]
+
+VERSION="0.2.0"
+WT_DEV_DIR="${WT_DEV_DIR:-$HOME/.wt-dev}"
+REGISTRY_FILE="$WT_DEV_DIR/port-registry.json"
+
+# ─── Port Registry ────────────────────────────────────────────
+
+registry_ensure() {
+  mkdir -p "$WT_DEV_DIR"
+  [ -f "$REGISTRY_FILE" ] || echo '{"allocations":{}}' > "$REGISTRY_FILE"
+}
+
+port_is_available() {
+  ! lsof -i ":${1}" -sTCP:LISTEN &>/dev/null
+}
+
+registry_allocate() {
+  local key="$1" env_example="$2" project_path="${3:-}" worktree_path="${4:-}"
+  registry_ensure
+
+  local registry
+  registry=$(cat "$REGISTRY_FILE")
+
+  if echo "$registry" | jq -e ".allocations[\"$key\"]" &>/dev/null; then
+    echo "ERROR: Ports already allocated for '$key'" >&2
+    return 1
+  fi
+
+  local used_ports
+  used_ports=$(echo "$registry" | jq -r '[.allocations[].ports | to_entries[].value] | .[]' 2>/dev/null || true)
+
+  local ports="{}"
+  local non_port_vars="{}"
+
+  while IFS='=' read -r var_name base_value || [ -n "$var_name" ]; do
+    [[ -z "$var_name" || "$var_name" =~ ^[[:space:]]*# ]] && continue
+    var_name=$(echo "$var_name" | xargs)
+    base_value=$(echo "$base_value" | xargs)
+
+    if [[ "$var_name" =~ _PORT$ ]]; then
+      local port=$((base_value + 1))
+      while true; do
+        local conflict=false
+        if echo "$used_ports" | grep -q "^${port}$" 2>/dev/null; then
+          conflict=true
+        elif ! port_is_available "$port"; then
+          conflict=true
+        fi
+        [ "$conflict" = false ] && break
+        port=$((port + 1))
+        if [ "$port" -gt 65535 ]; then
+          echo "ERROR: No available port for $var_name (base: $base_value)" >&2
+          return 1
+        fi
+      done
+      ports=$(echo "$ports" | jq --arg k "$var_name" --argjson v "$port" '.[$k] = $v')
+      used_ports=$(printf '%s\n%d' "$used_ports" "$port")
+    else
+      non_port_vars=$(echo "$non_port_vars" | jq --arg k "$var_name" --arg v "$base_value" '.[$k] = $v')
+    fi
+  done < "$env_example"
+
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  registry=$(echo "$registry" | jq \
+    --arg key "$key" --argjson ports "$ports" --argjson vars "$non_port_vars" \
+    --arg time "$now" --arg pp "$project_path" --arg wp "$worktree_path" \
+    '.allocations[$key] = {ports: $ports, vars: $vars, project_path: $pp, worktree_path: $wp, created_at: $time}')
+  echo "$registry" | jq '.' > "$REGISTRY_FILE"
+
+  echo "$ports" | jq -r 'to_entries[] | "\(.key)=\(.value)"'
+  echo "$non_port_vars" | jq -r 'to_entries[] | "\(.key)=\(.value)"'
+}
+
+registry_release() {
+  local key="$1"
+  registry_ensure
+  local registry
+  registry=$(cat "$REGISTRY_FILE")
+  if ! echo "$registry" | jq -e ".allocations[\"$key\"]" &>/dev/null; then
+    return 0
+  fi
+  echo "$registry" | jq --arg key "$key" 'del(.allocations[$key])' | jq '.' > "$REGISTRY_FILE"
+}
+
+# ─── dev up ─────────────────────────────────────────────────────
+
+cmd_up() {
+  local hook_mode=false project_dir="" name="" base_branch="main"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --hook)        hook_mode=true; shift ;;
+      --project-dir) project_dir="$2"; shift 2 ;;
+      -h|--help)
+        cat <<EOF
+Usage: dev up [OPTIONS] <name> [base-branch]
+
+Create a worktree and start its devcontainer.
+
+Arguments:
+  name          Worktree / branch name
+  base-branch   Base branch (default: main)
+
+Options:
+  --project-dir DIR   Project root (default: git root of CWD)
+  --hook              Read from stdin JSON (Claude Code hook mode)
+EOF
+        return 0 ;;
+      -*) echo "Unknown option: $1" >&2; return 1 ;;
+      *)  [ -z "$name" ] && name="$1" || base_branch="$1"; shift ;;
+    esac
+  done
+
+  if [ "$hook_mode" = true ]; then
+    local input
+    input=$(cat)
+    name=$(echo "$input" | jq -r '.name // empty')
+    local hook_cwd
+    hook_cwd=$(echo "$input" | jq -r '.cwd // empty')
+    [ -z "$project_dir" ] && [ -n "$hook_cwd" ] && project_dir="$hook_cwd"
+  fi
+
+  [ -z "$name" ] && { echo "ERROR: Name is required. Usage: dev up <name> [base-branch]" >&2; return 1; }
+
+  if [ -z "$project_dir" ]; then
+    project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    [ -z "$project_dir" ] && { echo "ERROR: Not in a git repo. Use --project-dir." >&2; return 1; }
+  fi
+
+  local project_name
+  project_name=$(basename "$project_dir")
+  local worktree_dir
+  worktree_dir="$(dirname "$project_dir")/${project_name}-${name}"
+  local registry_key="${project_name}/${name}"
+
+  log() { echo "$@" >&2; }
+
+  # Cleanup on failure
+  cleanup() {
+    local ec=$?
+    if [ $ec -ne 0 ]; then
+      log "ERROR: Failed. Cleaning up..."
+      [ -d "$worktree_dir/.devcontainer" ] && docker compose -f "$worktree_dir/.devcontainer/docker-compose.yml" down -v 2>/dev/null || true
+      [ -d "$worktree_dir" ] && git -C "$project_dir" worktree remove --force "$worktree_dir" 2>/dev/null || true
+      git -C "$project_dir" branch -D "$name" 2>/dev/null || true
+      registry_release "$registry_key" 2>/dev/null || true
+    fi
+  }
+  trap cleanup EXIT
+
+  [ ! -d "$project_dir/.devcontainer" ] && { log "ERROR: No .devcontainer/ in $project_dir"; return 1; }
+
+  # Allocate ports
+  local env_example="$project_dir/.devcontainer/.env.example"
+  local allocated_vars=""
+  if [ -f "$env_example" ]; then
+    log "Allocating ports..."
+    allocated_vars=$(registry_allocate "$registry_key" "$env_example" "$project_dir" "$worktree_dir")
+  fi
+
+  # Create worktree
+  log "Creating worktree..."
+  git -C "$project_dir" worktree add "$worktree_dir" -b "$name" "$base_branch"
+
+  # Copy and configure .devcontainer
+  log "Setting up devcontainer..."
+  cp -r "$project_dir/.devcontainer" "$worktree_dir/.devcontainer"
+
+  if [ -n "$allocated_vars" ]; then
+    allocated_vars=$(printf '%s\nWT_NAME=%s\nCOMPOSE_PROJECT_NAME=%s' \
+      "$allocated_vars" "${project_name}-${name}" "${project_name}-${name}")
+
+    echo "$allocated_vars" > "$worktree_dir/.devcontainer/.env"
+
+    local compose_file="$worktree_dir/.devcontainer/docker-compose.yml"
+    if [ -f "$compose_file" ]; then
+      while IFS='=' read -r key val; do
+        [ -z "$key" ] && continue
+        sed "s|\${${key}:-[^}]*}|${val}|g" "$compose_file" > "${compose_file}.tmp" && mv "${compose_file}.tmp" "$compose_file"
+        sed "s|\${${key}}|${val}|g" "$compose_file" > "${compose_file}.tmp" && mv "${compose_file}.tmp" "$compose_file"
+      done <<< "$allocated_vars"
+    fi
+
+    local dc_json="$worktree_dir/.devcontainer/devcontainer.json"
+    if [ -f "$dc_json" ] && command -v jq &>/dev/null; then
+      jq --arg n "${project_name}-${name}" '.name = $n' "$dc_json" > "${dc_json}.tmp" && mv "${dc_json}.tmp" "$dc_json"
+    fi
+  fi
+
+  # Start devcontainer
+  if command -v devcontainer &>/dev/null; then
+    log "Starting devcontainer..."
+    devcontainer up --workspace-folder "$worktree_dir" >&2
+  else
+    log "WARN: devcontainer CLI not found (npm install -g @devcontainers/cli)"
+  fi
+
+  # Summary
+  log ""
+  log "=== Worktree ready ==="
+  log "  Path:   $worktree_dir"
+  log "  Branch: $name"
+  if [ -n "$allocated_vars" ]; then
+    log "  Ports:"
+    echo "$allocated_vars" | grep '_PORT=' | while IFS='=' read -r k v; do log "    $k: $v"; done
+  fi
+  log ""
+  log "  cd $worktree_dir"
+  log "  devcontainer exec --workspace-folder . claude --dangerously-skip-permissions"
+
+  # stdout = worktree path (for Claude Code hook)
+  echo "$worktree_dir"
+}
+
+# ─── dev down ───────────────────────────────────────────────────
+
+cmd_down() {
+  local hook_mode=false project_dir="" name="" worktree_path="" force=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --hook)        hook_mode=true; shift ;;
+      --project-dir) project_dir="$2"; shift 2 ;;
+      --path)        worktree_path="$2"; shift 2 ;;
+      --force|-f)    force=true; shift ;;
+      -h|--help)
+        cat <<EOF
+Usage: dev down [OPTIONS] [name]
+
+Stop devcontainer and remove worktree.
+
+Options:
+  --project-dir DIR   Project root (default: git root of CWD)
+  --path PATH         Worktree path (alternative to name)
+  --force, -f         Skip uncommitted changes check
+  --hook              Read from stdin JSON (Claude Code hook mode)
+EOF
+        return 0 ;;
+      -*) echo "Unknown option: $1" >&2; return 1 ;;
+      *)  name="$1"; shift ;;
+    esac
+  done
+
+  if [ "$hook_mode" = true ]; then
+    local input
+    input=$(cat)
+    worktree_path=$(echo "$input" | jq -r '.worktree_path // empty')
+    local hook_cwd
+    hook_cwd=$(echo "$input" | jq -r '.cwd // empty')
+    [ -z "$project_dir" ] && [ -n "$hook_cwd" ] && project_dir="$hook_cwd"
+  fi
+
+  [ -z "$project_dir" ] && project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  local project_name=""
+  [ -n "$project_dir" ] && project_name=$(basename "$project_dir")
+
+  # Resolve name ↔ path
+  if [ -n "$worktree_path" ] && [ -z "$name" ]; then
+    local bn
+    bn=$(basename "$worktree_path")
+    if [ -n "$project_name" ] && [[ "$bn" == "${project_name}-"* ]]; then
+      name="${bn#${project_name}-}"
+    else
+      name="$bn"
+    fi
+  elif [ -n "$name" ] && [ -z "$worktree_path" ]; then
+    [ -n "$project_dir" ] && worktree_path="$(dirname "$project_dir")/${project_name}-${name}"
+  fi
+
+  [ -z "$name" ] && [ -z "$worktree_path" ] && { echo "ERROR: Name or --path required" >&2; return 1; }
+
+  local registry_key="${project_name}/${name}"
+  echo "Stopping '$name'..."
+
+  # Check uncommitted changes
+  if [ -d "$worktree_path" ] && [ "$force" = false ]; then
+    if ! git -C "$worktree_path" diff --quiet 2>/dev/null || \
+       ! git -C "$worktree_path" diff --cached --quiet 2>/dev/null; then
+      echo "WARNING: Uncommitted changes in $worktree_path"
+      if [ -t 0 ] && [ "$hook_mode" = false ]; then
+        read -rp "Continue? (y/N) " confirm
+        [[ "$confirm" != [yY]* ]] && { echo "Aborted."; return 1; }
+      else
+        echo "Use --force to skip." >&2; return 1
+      fi
+    fi
+  fi
+
+  # Stop containers
+  local compose_file="$worktree_path/.devcontainer/docker-compose.yml"
+  [ -f "$compose_file" ] && { echo "Stopping containers..."; docker compose -f "$compose_file" down -v 2>/dev/null || true; }
+
+  # Remove worktree
+  if [ -d "$worktree_path" ]; then
+    echo "Removing worktree..."
+    if [ "$force" = true ]; then
+      git -C "$project_dir" worktree remove --force "$worktree_path" 2>/dev/null || true
+    else
+      git -C "$project_dir" worktree remove "$worktree_path" 2>/dev/null || true
+    fi
+  fi
+  git -C "$project_dir" worktree prune 2>/dev/null || true
+
+  # Delete branch if merged
+  if [ -n "$name" ] && [ -n "$project_dir" ]; then
+    if git -C "$project_dir" branch -d "$name" 2>/dev/null; then
+      echo "Branch '$name' deleted (merged)."
+    else
+      echo "Branch '$name' kept (not merged). Use: git branch -D $name"
+    fi
+  fi
+
+  # Release ports
+  registry_release "$registry_key" 2>/dev/null || true
+  echo "Done."
+}
+
+# ─── dev list ──────────────────────────────────────────────────
+
+cmd_list() {
+  local project_dir="" json_output=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project-dir) project_dir="$2"; shift 2 ;;
+      --json)        json_output=true; shift ;;
+      -h|--help)
+        cat <<EOF
+Usage: dev list [OPTIONS]
+
+List active worktrees with port and container status.
+
+Options:
+  --project-dir DIR   Filter by project
+  --json              Output JSON
+EOF
+        return 0 ;;
+      *) echo "Unknown option: $1" >&2; return 1 ;;
+    esac
+  done
+
+  registry_ensure
+  local registry
+  registry=$(cat "$REGISTRY_FILE")
+  local count
+  count=$(echo "$registry" | jq '.allocations | length')
+
+  if [ "$count" -eq 0 ]; then
+    echo "No active worktrees."
+    return 0
+  fi
+
+  if [ -n "$project_dir" ]; then
+    local pn
+    pn=$(basename "$project_dir")
+    registry=$(echo "$registry" | jq --arg pn "$pn" '{
+      allocations: (.allocations | to_entries | map(select(.key | startswith($pn + "/"))) | from_entries)
+    }')
+  fi
+
+  if [ "$json_output" = true ]; then
+    echo "$registry" | jq '.allocations'
+    return 0
+  fi
+
+  printf "%-25s %-20s %-35s %-10s %s\n" "NAME" "BRANCH" "PORTS" "STATUS" "PATH"
+  printf "%-25s %-20s %-35s %-10s %s\n" "----" "------" "-----" "------" "----"
+
+  echo "$registry" | jq -r '.allocations | to_entries[] | [
+    .key,
+    .value.worktree_path,
+    (.value.ports | to_entries | map("\(.key | gsub("WT_";"") | gsub("_PORT";""))=\(.value)") | join(", "))
+  ] | @tsv' | while IFS=$'\t' read -r key wt_path ports; do
+    local branch="${key#*/}"
+    local status="unknown"
+    local cf="$wt_path/.devcontainer/docker-compose.yml"
+    if [ -f "$cf" ]; then
+      local running
+      running=$(docker compose -f "$cf" ps --status running -q 2>/dev/null | wc -l | tr -d ' ')
+      [ "$running" -gt 0 ] && status="running" || status="stopped"
+    fi
+    printf "%-25s %-20s %-35s %-10s %s\n" "$key" "$branch" "$ports" "$status" "$wt_path"
+  done
+}
+
+# ─── dev ports ─────────────────────────────────────────────────
+
+cmd_ports() {
+  local subcmd="${1:-list}"
+  shift 2>/dev/null || true
+
+  case "$subcmd" in
+    allocate)     registry_allocate "$@" ;;
+    release)      registry_release "$@" && echo "Released." ;;
+    get)
+      local key="${1:?Usage: dev ports get <key>}"
+      registry_ensure
+      jq -r ".allocations[\"$key\"].ports | to_entries[] | \"\(.key)=\(.value)\"" "$REGISTRY_FILE"
+      ;;
+    find-by-path)
+      local path="${1:?Usage: dev ports find-by-path <path>}"
+      registry_ensure
+      jq -r --arg p "$path" '.allocations | to_entries[] | select(.value.worktree_path == $p) | .key' "$REGISTRY_FILE"
+      ;;
+    list)
+      registry_ensure
+      local count
+      count=$(jq '.allocations | length' "$REGISTRY_FILE")
+      if [ "$count" -eq 0 ]; then echo "No allocations."; return 0; fi
+      printf "%-30s %-40s %s\n" "KEY" "WORKTREE PATH" "PORTS"
+      printf "%-30s %-40s %s\n" "---" "-------------" "-----"
+      jq -r '.allocations | to_entries[] | [
+        .key, .value.worktree_path,
+        (.value.ports | to_entries | map("\(.key)=\(.value)") | join(", "))
+      ] | @tsv' "$REGISTRY_FILE" | while IFS=$'\t' read -r key wt_path ports; do
+        printf "%-30s %-40s %s\n" "$key" "$wt_path" "$ports"
+      done
+      ;;
+    -h|--help)
+      cat <<EOF
+Usage: dev ports <command> [args]
+
+Commands:
+  list                          List all port allocations
+  get <key>                     Show ports for a worktree
+  allocate <key> <env-example>  Allocate ports
+  release <key>                 Release ports
+  find-by-path <path>           Find key by worktree path
+EOF
+      ;;
+    *) echo "Unknown ports command: $subcmd" >&2; return 1 ;;
+  esac
+}
+
+# ─── Main ─────────────────────────────────────────────────────
+
+usage() {
+  cat <<EOF
+dev $VERSION - Isolated parallel development environments
+
+Usage: dev <command> [options]
+
+Commands:
+  up <name> [base]   Create worktree + start devcontainer
+  down <name>        Stop devcontainer + remove worktree
+  list               Show active worktrees
+  ports              Manage port allocations
+
+Run 'dev <command> --help' for details.
+EOF
+}
+
+case "${1:-}" in
+  up)     shift; cmd_up "$@" ;;
+  down)   shift; cmd_down "$@" ;;
+  list|ls) shift; cmd_list "$@" ;;
+  ports)  shift; cmd_ports "$@" ;;
+  -v|--version) echo "dev $VERSION" ;;
+  -h|--help|"") usage ;;
+  *)      echo "Unknown command: $1" >&2; usage; exit 1 ;;
+esac
