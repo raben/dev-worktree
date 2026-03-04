@@ -11,4 +11,4 @@ else
   echo "Not installed at $target"
 fi
 
-echo "State directory (~/.wt-dev/) was kept."
+echo "State directory (~/.dev-worktree/) was kept."

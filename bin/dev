@@ -5,13 +5,13 @@ set -euo pipefail
 # Usage: dev <command> [options]
 
 VERSION="0.2.0"
-WT_DEV_DIR="${WT_DEV_DIR:-$HOME/.wt-dev}"
-REGISTRY_FILE="$WT_DEV_DIR/port-registry.json"
+DEV_STATE_DIR="${DEV_STATE_DIR:-$HOME/.dev-worktree}"
+REGISTRY_FILE="$DEV_STATE_DIR/port-registry.json"
 
 # ─── Port Registry ────────────────────────────────────────────
 
 registry_ensure() {
-  mkdir -p "$WT_DEV_DIR"
+  mkdir -p "$DEV_STATE_DIR"
   [ -f "$REGISTRY_FILE" ] || echo '{"allocations":{}}' > "$REGISTRY_FILE"
 }
 
