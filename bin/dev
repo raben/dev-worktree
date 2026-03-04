@@ -438,6 +438,96 @@ EOF
   esac
 }
 
+# ─── dev init ─────────────────────────────────────────────────
+
+INIT_PROMPT='Analyze this project and generate a `.devcontainer/` directory compatible with the `dev` CLI tool (dev-worktree).
+
+## What to generate
+
+1. `.devcontainer/Dockerfile`
+2. `.devcontainer/devcontainer.json`
+3. `.devcontainer/docker-compose.yml`
+4. `.devcontainer/.env.example`
+
+## Analysis steps
+
+1. Detect runtime/language from project files (package.json, go.mod, requirements.txt, Cargo.toml, etc.)
+2. Detect package manager from lockfiles (pnpm-lock.yaml → pnpm, yarn.lock → yarn, etc.)
+3. Detect existing services from compose.yml / docker-compose.yml if present
+4. Identify which ports the project uses
+
+## Conventions (MUST follow)
+
+### Dockerfile
+- Base image: use the appropriate `mcr.microsoft.com/devcontainers/*` image
+- Install: git, jq, curl
+- Install Claude Code: `npm install -g @anthropic-ai/claude-code`
+- Install project-specific package manager if needed (pnpm, yarn, etc.)
+- Non-root user (node for Node.js, vscode for others)
+- WORKDIR /workspace
+
+### devcontainer.json
+- `"name"`: project directory name
+- `"dockerComposeFile"`: "docker-compose.yml"
+- `"service"`: "app"
+- `"workspaceFolder"`: "/workspace"
+- `"remoteUser"`: appropriate non-root user
+- `"mounts"`: bind mount `~/.claude` (for auth) and `~/.gitconfig` (readonly)
+- `"containerEnv"`: set `CLAUDE_CONFIG_DIR` to the mounted .claude path
+- `"postCreateCommand"`: appropriate install command (npm ci, pnpm install, pip install, etc.)
+
+### docker-compose.yml
+- Use `${WT_NAME:-<project-name>}` in all `container_name:` fields
+- Use `${COMPOSE_PROJECT_NAME:-<project-name>}` or rely on docker compose default
+- Use `${WT_<SERVICE>_PORT:-<default>}:<container-port>` for ALL port mappings
+- App service: `command: sleep infinity` (Claude Code starts services as needed)
+- App service: mount `..:/workspace:cached` and a named volume for node_modules/venv/etc.
+- Include all dependent services the project needs (database, cache, emulators, etc.)
+
+### .env.example
+- Header comment explaining the format
+- `WT_NAME=<project-name>`
+- `COMPOSE_PROJECT_NAME=<project-name>`
+- One `WT_<SERVICE>_PORT=<default-port>` line per port mapping in docker-compose.yml
+- Variables ending in `_PORT` are auto-allocated by `dev up`; others are passed through
+
+## Important
+- Do NOT add unnecessary services. Only include what the project actually uses.
+- Do NOT modify any existing project files. Only create files in `.devcontainer/`.
+- If `.devcontainer/` already exists, ask before overwriting.'
+
+cmd_init() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        cat <<EOF
+Usage: dev init
+
+Generate .devcontainer/ for the current project using Claude.
+
+Analyzes the project structure and creates devcontainer configuration
+compatible with 'dev up'. Requires 'claude' CLI to be installed.
+EOF
+        return 0 ;;
+      *) echo "Unknown option: $1" >&2; return 1 ;;
+    esac
+  done
+
+  if ! command -v claude &>/dev/null; then
+    echo "ERROR: claude CLI not found. Install from https://docs.anthropic.com/en/docs/claude-code" >&2
+    return 1
+  fi
+
+  if [ -d ".devcontainer" ]; then
+    echo "WARNING: .devcontainer/ already exists."
+    read -rp "Overwrite? (y/N) " confirm
+    [[ "$confirm" != [yY]* ]] && { echo "Aborted."; return 1; }
+  fi
+
+  echo "Analyzing project and generating .devcontainer/ ..."
+  claude -p "$INIT_PROMPT"
+}
+
 # ─── Main ─────────────────────────────────────────────────────
 
 usage() {
@@ -447,6 +537,7 @@ dev $VERSION - Isolated parallel development environments
 Usage: dev <command> [options]
 
 Commands:
+  init               Generate .devcontainer/ for this project
   up <name> [base]   Create worktree + start devcontainer
   down <name>        Stop devcontainer + remove worktree
   list               Show active worktrees
@@ -457,6 +548,7 @@ EOF
 }
 
 case "${1:-}" in
+  init)   shift; cmd_init "$@" ;;
   up)     shift; cmd_up "$@" ;;
   down)   shift; cmd_down "$@" ;;
   list|ls) shift; cmd_list "$@" ;;
