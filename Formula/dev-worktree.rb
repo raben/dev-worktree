@@ -1,8 +1,8 @@
 class DevWorktree < Formula
   desc "Isolated parallel development environments with worktree + devcontainer"
   homepage "https://github.com/raben/dev-worktree"
-  url "https://github.com/raben/dev-worktree/archive/refs/tags/v0.3.0.tar.gz"
-  sha256 "479405990536bd09278b4ef7b28a05f6ae1c79928e3ff0af3b72fcd6782d6b03"
+  url "https://github.com/raben/dev-worktree/archive/refs/tags/v0.4.0.tar.gz"
+  sha256 "a602ebe390d15626ebaf48ef8effa53b67d18adafa8b57b6b2755ed149489805"
   license "MIT"
   head "https://github.com/raben/dev-worktree.git", branch: "main"
 

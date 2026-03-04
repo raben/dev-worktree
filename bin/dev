@@ -440,21 +440,31 @@ EOF
 
 # ─── dev init ─────────────────────────────────────────────────
 
-INIT_PROMPT='Analyze this project and generate a `.devcontainer/` directory compatible with the `dev` CLI tool (dev-worktree).
+INIT_PROMPT='You are setting up a devcontainer for the `dev` CLI tool (dev-worktree).
 
-## What to generate
+## Step 1: Project validation
+
+First, analyze the current directory and determine:
+- Is this a software development project? (look for package.json, go.mod, Cargo.toml, requirements.txt, pyproject.toml, Makefile, src/, etc.)
+- What language/runtime does it use?
+- What services does it depend on? (databases, caches, emulators, etc.)
+- Does `.devcontainer/` already exist?
+
+Present your findings as a brief summary and ask the user to confirm before proceeding.
+Example:
+  "Node.js (pnpm) + Spanner emulator. Ports: MCP 3000, Web 3001, Spanner 9010/9020. Proceed?"
+
+If this does NOT look like a development project (no recognizable project files), tell the user and stop.
+If `.devcontainer/` already exists, show what is there and ask if they want to overwrite.
+
+## Step 2: Generate files
+
+After user confirmation, generate:
 
 1. `.devcontainer/Dockerfile`
 2. `.devcontainer/devcontainer.json`
 3. `.devcontainer/docker-compose.yml`
 4. `.devcontainer/.env.example`
-
-## Analysis steps
-
-1. Detect runtime/language from project files (package.json, go.mod, requirements.txt, Cargo.toml, etc.)
-2. Detect package manager from lockfiles (pnpm-lock.yaml → pnpm, yarn.lock → yarn, etc.)
-3. Detect existing services from compose.yml / docker-compose.yml if present
-4. Identify which ports the project uses
 
 ## Conventions (MUST follow)
 
@@ -518,14 +528,8 @@ EOF
     return 1
   fi
 
-  if [ -d ".devcontainer" ]; then
-    echo "WARNING: .devcontainer/ already exists."
-    read -rp "Overwrite? (y/N) " confirm
-    [[ "$confirm" != [yY]* ]] && { echo "Aborted."; return 1; }
-  fi
-
-  echo "Analyzing project and generating .devcontainer/ ..."
-  claude -p "$INIT_PROMPT"
+  echo "Starting Claude to analyze project and generate .devcontainer/ ..."
+  claude --prompt "$INIT_PROMPT"
 }
 
 # ─── Main ─────────────────────────────────────────────────────
