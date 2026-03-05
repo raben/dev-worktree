@@ -2,7 +2,7 @@
 
 ワンコマンドで「ブランチごとの独立開発環境」を立ち上げるCLIツール。
 
-git worktree + devcontainer + Claude Code を組み合わせて、複数ブランチの並行開発を実現する。
+git worktree + devcontainer + AI coding CLI を組み合わせて、複数ブランチの並行開発を実現する。
 
 ## インストール
 
@@ -24,12 +24,19 @@ cd dev-worktree
 
 ### 依存
 
-| ツール | インストール |
-|--------|-------------|
-| [jq](https://jqlang.github.io/jq/) | Homebrew が自動インストール |
-| [devcontainer CLI](https://github.com/devcontainers/cli) | `npm install -g @devcontainers/cli` |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `npm install -g @anthropic-ai/claude-code` |
-| [Docker](https://www.docker.com/) | Docker Desktop など |
+| ツール | 用途 | インストール |
+|--------|------|-------------|
+| [jq](https://jqlang.github.io/jq/) | ポート管理 | Homebrew が自動インストール |
+| [devcontainer CLI](https://github.com/devcontainers/cli) | コンテナ管理 | `npm install -g @devcontainers/cli` |
+| [Docker](https://www.docker.com/) | コンテナ実行 | Docker Desktop など |
+| [tmux](https://github.com/tmux/tmux) | ダッシュボード（`dev open`） | `brew install tmux` |
+
+AI CLI（いずれか）:
+
+| CLI | インストール |
+|-----|-------------|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (デフォルト) | `npm install -g @anthropic-ai/claude-code` |
+| その他（Aider, Codex 等） | `--ai-cmd` / `WT_EXEC_CMD` で指定 |
 
 ## 使い方
 
@@ -40,7 +47,12 @@ cd your-project
 dev init
 ```
 
-Claude がプロジェクトを分析し、`.devcontainer/` を対話的に生成する。
+AI CLI がプロジェクトを分析し、`.devcontainer/` を対話的に生成する。
+
+```bash
+# Claude 以外の AI CLI を使う場合
+dev init --ai-cmd codex
+```
 
 ### 2. ブランチごとの開発環境を立ち上げる
 
@@ -54,28 +66,47 @@ dev up feature-auth
 2. `git worktree add` でブランチ作成
 3. `.devcontainer/` をコピー＆ポート設定を反映
 4. `devcontainer up` でコンテナ起動
-5. コンテナ内で Claude Code セッションを起動
 
 ```bash
-# 別ターミナルで2つ目の環境も同時に起動できる
+# 名前省略で自動生成
+dev up
+
+# 別ターミナルで2つ目も同時起動
 dev up feature-billing
+
+# 既存の worktree は自動で再利用（コンテナが停止していれば再起動）
+dev up feature-auth
 ```
 
-### 3. 環境を停止・削除する
+### 3. AI セッションを開く
 
 ```bash
-dev down feature-auth
+# tmux ダッシュボード（全環境を分割表示、新環境を自動検知）
+dev open
+
+# 単一環境に直接接続
+dev open feature-auth
 ```
 
-コンテナ停止 → worktree 削除 → ポート解放を行う。未コミットの変更がある場合は確認される。
+### 4. 環境を停止・削除する
+
+```bash
+# 停止のみ（worktree・ポートは保持）
+dev down feature-auth
+
+# 完全削除（コンテナ・worktree・ブランチ・ポート）
+dev prune feature-auth
+```
 
 ## コマンド
 
 | コマンド | 説明 |
 |---------|------|
 | `dev init` | `.devcontainer/` を対話的に生成 |
-| `dev up <name> [base]` | worktree 作成 → コンテナ起動 → Claude 起動 |
-| `dev down <name>` | コンテナ停止 → worktree 削除 |
+| `dev up [name] [base]` | worktree 作成 → コンテナ起動 |
+| `dev open [name]` | AI セッションを開く（tmux ダッシュボード） |
+| `dev down <name>` | コンテナ停止（worktree は保持） |
+| `dev prune <name>` | コンテナ・worktree・ブランチ・ポートを完全削除 |
 | `dev list` | 稼働中の worktree 一覧 |
 | `dev ports` | ポート割り当て管理 |
 
@@ -89,12 +120,14 @@ dev down feature-auth
 # .devcontainer/.env.example
 WT_NAME=myapp
 COMPOSE_PROJECT_NAME=myapp
+WT_EXEC_CMD=claude --dangerously-skip-permissions
 WT_API_PORT=3000
 WT_WEB_PORT=3001
 WT_DB_PORT=5432
 ```
 
 - `_PORT` で終わる変数は `dev up` 時に空きポートが自動割り当てされる
+- `WT_EXEC_CMD` は `dev open` で実行されるコマンド
 - それ以外の変数はそのまま渡される
 - 割り当て状態は `~/.dev-worktree/port-registry.json` でグローバル管理
 

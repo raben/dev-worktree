@@ -17,6 +17,26 @@ _trim() {
   printf '%s' "$s"
 }
 
+_validate_name() {
+  local name="$1"
+  if [[ ! "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/-]*$ ]]; then
+    echo "ERROR: Invalid name '$name'. Use alphanumeric, dots, hyphens, slashes." >&2
+    return 1
+  fi
+  if [[ "$name" == *".."* ]]; then
+    echo "ERROR: Name must not contain '..'." >&2
+    return 1
+  fi
+}
+
+_validate_exec_cmd() {
+  local cmd="$1"
+  if [[ "$cmd" =~ [\;\|\&\`\$\>\<] ]] || [[ "$cmd" == *'$('* ]] || [[ "$cmd" == *$'\n'* ]]; then
+    echo "ERROR: WT_EXEC_CMD contains unsafe characters: $cmd" >&2
+    return 1
+  fi
+}
+
 _with_lock() {
   local lockdir="${REGISTRY_FILE}.lock"
   local max_wait=30 waited=0
@@ -28,7 +48,7 @@ _with_lock() {
       return 1
     fi
   done
-  trap 'rmdir "'"$lockdir"'" 2>/dev/null' RETURN
+  trap 'rmdir "${REGISTRY_FILE}.lock" 2>/dev/null' RETURN
   "$@"
 }
 
@@ -79,6 +99,10 @@ _registry_allocate_impl() {
     base_value=$(_trim "$base_value")
 
     if [[ "$var_name" =~ _PORT$ ]]; then
+      if ! [[ "$base_value" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Invalid port value for $var_name: $base_value" >&2
+        return 1
+      fi
       local port=$((base_value + 1))
       while true; do
         local conflict=false
@@ -160,6 +184,7 @@ EOF
   done
 
   [ -z "$name" ] && name="wt-$(head -c 4 /dev/urandom | xxd -p)"
+  _validate_name "$name"
 
   if [ -z "$project_dir" ]; then
     project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
@@ -549,7 +574,7 @@ _container_is_running() {
   local compose_file="$wt_path/.devcontainer/docker-compose.yml"
   [ -f "$compose_file" ] || return 1
   local running
-  running=$(timeout 5 docker compose -f "$compose_file" ps --status running -q 2>/dev/null | wc -l | tr -d ' ')
+  running=$(docker compose -f "$compose_file" ps --status running -q 2>/dev/null | wc -l | tr -d ' ')
   [ "$running" -gt 0 ]
 }
 
@@ -561,10 +586,12 @@ _get_exec_cmd() {
   if [ -z "$cmd" ]; then
     cmd="claude --dangerously-skip-permissions"
   fi
+  _validate_exec_cmd "$cmd"
   echo "$cmd"
 }
 
 _watcher() {
+  trap 'exit 0' SIGTERM SIGINT
   local session="$1" filter="${2:-}"
 
   while true; do
@@ -777,53 +804,46 @@ After user confirmation, generate:
 - If `.devcontainer/` already exists, ask before overwriting.'
 
 cmd_init() {
-  local exec_cmd=""
+  local exec_cmd="" ai_cmd=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --exec-cmd) exec_cmd="$2"; shift 2 ;;
+      --ai-cmd)   ai_cmd="$2"; shift 2 ;;
       -h|--help)
         cat <<EOF
 Usage: dev init [OPTIONS]
 
-Generate .devcontainer/ for the current project using Claude.
-
-Analyzes the project structure and creates devcontainer configuration
-compatible with 'dev up'.
+Generate .devcontainer/ for the current project using an AI CLI.
+Defaults to Claude.
 
 Options:
-  --exec-cmd CMD   AI CLI command for 'dev open' (default: claude --dangerously-skip-permissions)
+  --ai-cmd CMD     AI CLI command (default: claude)
+  --exec-cmd CMD   Command for 'dev open' sessions (default: claude --dangerously-skip-permissions)
 EOF
         return 0 ;;
       *) echo "Unknown option: $1" >&2; return 1 ;;
     esac
   done
 
-  if ! command -v claude &>/dev/null; then
-    echo "Claude CLI not found."
-    echo ""
-    echo "dev init requires Claude CLI to generate .devcontainer/."
-    echo "Install: npm install -g @anthropic-ai/claude-code"
-    echo ""
-    if [ -z "$exec_cmd" ]; then
-      echo "Which AI CLI will 'dev open' use to connect to containers?"
-      echo "  Examples: claude --dangerously-skip-permissions, aider, codex, bash"
-      printf "  WT_EXEC_CMD [bash]: "
-      read -r exec_cmd
-      exec_cmd="${exec_cmd:-bash}"
-    fi
-    echo ""
-    echo "ERROR: claude CLI is required for 'dev init'. Install it and re-run." >&2
+  [ -z "$ai_cmd" ] && ai_cmd="claude"
+
+  if ! command -v "${ai_cmd%% *}" &>/dev/null; then
+    echo "ERROR: '${ai_cmd%% *}' not found. Install it or use --ai-cmd to specify another CLI." >&2
     return 1
   fi
 
-  # Claude available — default exec cmd
+  # WT_EXEC_CMD default: match ai_cmd
   if [ -z "$exec_cmd" ]; then
-    exec_cmd="claude --dangerously-skip-permissions"
+    case "$ai_cmd" in
+      claude) exec_cmd="claude --dangerously-skip-permissions" ;;
+      *)      exec_cmd="$ai_cmd" ;;
+    esac
   fi
+  _validate_exec_cmd "$exec_cmd"
 
-  echo "Starting Claude to analyze project and generate .devcontainer/ ..."
-  DEV_EXEC_CMD="$exec_cmd" claude --prompt "$INIT_PROMPT"
+  echo "Generating .devcontainer/ with ${ai_cmd%% *} ..."
+  DEV_EXEC_CMD="$exec_cmd" $ai_cmd --prompt "$INIT_PROMPT"
 }
 
 # ─── Main ─────────────────────────────────────────────────────
