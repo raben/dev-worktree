@@ -29,6 +29,49 @@ _validate_name() {
   fi
 }
 
+_select_environment() {
+  local containers
+  containers=$(docker ps -a --filter "label=dev-worktree" \
+    --format '{{.Label "dev-worktree"}}\t{{.State}}' 2>/dev/null || true)
+
+  if [ -z "$containers" ]; then
+    echo "ERROR: No dev-worktree environments found." >&2
+    return 1
+  fi
+
+  # Deduplicate keys
+  local keys=()
+  local seen=""
+  while IFS=$'\t' read -r key state; do
+    [ -z "$key" ] && continue
+    echo "$seen" | grep -qFx "$key" && continue
+    seen=$(printf '%s\n%s' "$seen" "$key")
+    keys+=("$key ($state)")
+  done <<< "$containers"
+
+  if [ "${#keys[@]}" -eq 1 ]; then
+    # Single environment — use it directly
+    echo "${keys[0]%% (*}"
+    return 0
+  fi
+
+  echo "Select environment:" >&2
+  local i=1
+  for entry in "${keys[@]}"; do
+    echo "  $i) $entry" >&2
+    i=$((i + 1))
+  done
+  printf "  #: " >&2
+  local choice
+  read -r choice
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#keys[@]}" ]; then
+    echo "ERROR: Invalid selection." >&2
+    return 1
+  fi
+  local selected="${keys[$((choice - 1))]}"
+  echo "${selected%% (*}"
+}
+
 _validate_exec_cmd() {
   local cmd="$1"
   if [[ "$cmd" =~ [\;\|\&\`\$\>\<] ]] || [[ "$cmd" == *'$('* ]] || [[ "$cmd" == *$'\n'* ]]; then
@@ -369,7 +412,11 @@ EOF
   resolved=$(_resolve_worktree "$project_dir" "$name" "$worktree_path")
   IFS=$'\t' read -r name worktree_path _ <<< "$resolved"
 
-  [ -z "$name" ] && [ -z "$worktree_path" ] && { echo "ERROR: Name or --path required" >&2; return 1; }
+  if [ -z "$name" ] && [ -z "$worktree_path" ]; then
+    local selected
+    selected=$(_select_environment) || return 1
+    name="${selected#*/}"
+  fi
 
   echo "Stopping '$name'..."
 
@@ -416,7 +463,11 @@ EOF
   resolved=$(_resolve_worktree "$project_dir" "$name" "$worktree_path")
   IFS=$'\t' read -r name worktree_path project_name <<< "$resolved"
 
-  [ -z "$name" ] && [ -z "$worktree_path" ] && { echo "ERROR: Name or --path required" >&2; return 1; }
+  if [ -z "$name" ] && [ -z "$worktree_path" ]; then
+    local selected
+    selected=$(_select_environment) || return 1
+    name="${selected#*/}"
+  fi
 
   local registry_key="${project_name}/${name}"
   echo "Removing '$name'..."
@@ -713,6 +764,28 @@ EOF
     esac
   done
 
+  # ── Resolve name if not specified ──
+  if [ -z "$name" ]; then
+    # Count running dev-worktree containers
+    local running_containers
+    running_containers=$(docker ps --filter "label=dev-worktree" --filter "status=running" \
+      --format '{{.Label "dev-worktree"}}' 2>/dev/null | sort -u || true)
+    local running_count
+    running_count=$(echo "$running_containers" | grep -c . 2>/dev/null || echo 0)
+
+    if [ "$running_count" -eq 1 ]; then
+      # Single environment — connect directly
+      local selected_key
+      selected_key=$(echo "$running_containers" | head -1)
+      name="${selected_key#*/}"
+    elif [ "$running_count" -gt 1 ]; then
+      # Multiple — ask: select one or dashboard
+      local selected
+      selected=$(_select_environment) || return 1
+      name="${selected#*/}"
+    fi
+  fi
+
   # ── Single session mode ──
   if [ -n "$name" ]; then
     local project_dir
@@ -736,7 +809,7 @@ EOF
     return
   fi
 
-  # ── Dashboard mode ──
+  # ── Dashboard mode (no running environments) ──
   if ! command -v tmux &>/dev/null; then
     echo "ERROR: tmux required for dashboard mode. Install: brew install tmux" >&2
     return 1
