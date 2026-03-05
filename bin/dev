@@ -226,7 +226,10 @@ EOF
     esac
   done
 
-  [ -z "$name" ] && name="wt-$(head -c 4 /dev/urandom | xxd -p)"
+  if [ -z "$name" ]; then
+    name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    [ -z "$name" ] || [ "$name" = "HEAD" ] && name="wt-$(head -c 4 /dev/urandom | xxd -p)"
+  fi
   _validate_name "$name"
 
   if [ -z "$project_dir" ]; then
@@ -258,12 +261,12 @@ EOF
       else
         echo "Starting devcontainer..."
         devcontainer up --workspace-folder "$worktree_dir" \
-          --id-label "dev-worktree=$registry_key"
+          --id-label "dev-worktree=$registry_key" --id-label "dev-worktree.path=$worktree_dir"
       fi
     else
       echo "Starting devcontainer..."
       devcontainer up --workspace-folder "$worktree_dir" \
-        --id-label "dev-worktree=$registry_key"
+        --id-label "dev-worktree=$registry_key" --id-label "dev-worktree.path=$worktree_dir"
     fi
 
     # Ensure registry entry exists (may be missing after upgrade or manual setup)
@@ -341,7 +344,7 @@ EOF
   # Start devcontainer with dev-worktree label
   echo "Starting devcontainer..."
   devcontainer up --workspace-folder "$worktree_dir" \
-    --id-label "dev-worktree=$registry_key"
+    --id-label "dev-worktree=$registry_key" --id-label "dev-worktree.path=$worktree_dir"
 
   # Disable cleanup — worktree created successfully
   _cleanup_enabled=false
@@ -362,118 +365,96 @@ EOF
 
 # ─── dev down ───────────────────────────────────────────────────
 
-# Resolve worktree name ↔ path from arguments
-_resolve_worktree() {
-  local _project_dir="$1" _name="$2" _worktree_path="$3"
-  local _project_name=""
-  [ -n "$_project_dir" ] && _project_name=$(basename "$_project_dir")
-
-  if [ -n "$_worktree_path" ] && [ -z "$_name" ]; then
-    local bn
-    bn=$(basename "$_worktree_path")
-    if [ -n "$_project_name" ] && [[ "$bn" == "${_project_name}-"* ]]; then
-      _name="${bn#${_project_name}-}"
-    else
-      _name="$bn"
-    fi
-  elif [ -n "$_name" ] && [ -z "$_worktree_path" ]; then
-    [ -n "$_project_dir" ] && _worktree_path="$(dirname "$_project_dir")/${_project_name}-${_name}"
-  fi
-
-  echo "$_name"$'\t'"$_worktree_path"$'\t'"$_project_name"
-}
-
 cmd_down() {
-  local project_dir="" name="" worktree_path=""
+  local registry_key=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --project-dir) project_dir="$2"; shift 2 ;;
-      --path)        worktree_path="$2"; shift 2 ;;
       -h|--help)
         cat <<EOF
-Usage: dev down [OPTIONS] <name>
+Usage: dev down [name]
 
 Stop devcontainer (worktree and ports are kept).
-
-Options:
-  --project-dir DIR   Project root (default: git root of CWD)
-  --path PATH         Worktree path (alternative to name)
+Name omitted: select from running environments.
 EOF
         return 0 ;;
       -*) echo "Unknown option: $1" >&2; return 1 ;;
-      *)  name="$1"; shift ;;
+      *)  registry_key="$1"; shift ;;
     esac
   done
 
-  [ -z "$project_dir" ] && project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
-
-  local resolved
-  resolved=$(_resolve_worktree "$project_dir" "$name" "$worktree_path")
-  IFS=$'\t' read -r name worktree_path _ <<< "$resolved"
-
-  if [ -z "$name" ] && [ -z "$worktree_path" ]; then
-    local selected
-    selected=$(_select_environment) || return 1
-    name="${selected#*/}"
+  # Resolve registry key
+  if [ -z "$registry_key" ]; then
+    registry_key=$(_select_environment) || return 1
   fi
 
-  echo "Stopping '$name'..."
+  # If bare name given (no /), prepend project name
+  if [[ "$registry_key" != */* ]]; then
+    local project_dir
+    project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    [ -n "$project_dir" ] && registry_key="$(basename "$project_dir")/$registry_key"
+  fi
 
-  local compose_file="$worktree_path/.devcontainer/docker-compose.yml"
-  if [ -f "$compose_file" ]; then
-    docker compose -f "$compose_file" down 2>/dev/null || true
+  echo "Stopping '$registry_key'..."
+
+  # Stop containers by label
+  local container_ids
+  container_ids=$(docker ps --filter "label=dev-worktree=$registry_key" -q 2>/dev/null || true)
+  if [ -n "$container_ids" ]; then
+    echo "$container_ids" | xargs docker stop 2>/dev/null || true
   else
-    echo "No compose file found at $worktree_path" >&2
+    echo "No running containers found for '$registry_key'." >&2
   fi
 
-  echo "Done. Worktree kept at $worktree_path"
+  echo "Done."
 }
 
 # ─── dev prune ─────────────────────────────────────────────────
 
 cmd_prune() {
-  local project_dir="" name="" worktree_path="" force=false
+  local registry_key="" force=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --project-dir) project_dir="$2"; shift 2 ;;
-      --path)        worktree_path="$2"; shift 2 ;;
       --force|-f)    force=true; shift ;;
       -h|--help)
         cat <<EOF
-Usage: dev prune [OPTIONS] <name>
+Usage: dev prune [OPTIONS] [name]
 
 Remove worktree, containers, branch, and release ports.
 
 Options:
-  --project-dir DIR   Project root (default: git root of CWD)
-  --path PATH         Worktree path (alternative to name)
   --force, -f         Skip uncommitted changes check
 EOF
         return 0 ;;
       -*) echo "Unknown option: $1" >&2; return 1 ;;
-      *)  name="$1"; shift ;;
+      *)  registry_key="$1"; shift ;;
     esac
   done
 
-  [ -z "$project_dir" ] && project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
-
-  local resolved project_name
-  resolved=$(_resolve_worktree "$project_dir" "$name" "$worktree_path")
-  IFS=$'\t' read -r name worktree_path project_name <<< "$resolved"
-
-  if [ -z "$name" ] && [ -z "$worktree_path" ]; then
-    local selected
-    selected=$(_select_environment) || return 1
-    name="${selected#*/}"
+  # Resolve registry key
+  if [ -z "$registry_key" ]; then
+    registry_key=$(_select_environment) || return 1
+  fi
+  if [[ "$registry_key" != */* ]]; then
+    local project_dir
+    project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    [ -n "$project_dir" ] && registry_key="$(basename "$project_dir")/$registry_key"
   fi
 
-  local registry_key="${project_name}/${name}"
-  echo "Removing '$name'..."
+  # Get worktree path from docker label
+  local worktree_path
+  worktree_path=$(docker ps -a --filter "label=dev-worktree=$registry_key" \
+    --format '{{.Label "dev-worktree.path"}}' 2>/dev/null | head -1)
+
+  local name="${registry_key#*/}"
+  local project_dir
+  project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
+
+  echo "Removing '$registry_key'..."
 
   # Check uncommitted changes
-  if [ -d "$worktree_path" ] && [ "$force" = false ]; then
+  if [ -n "$worktree_path" ] && [ -d "$worktree_path" ] && [ "$force" = false ]; then
     if ! git -C "$worktree_path" diff --quiet 2>/dev/null || \
        ! git -C "$worktree_path" diff --cached --quiet 2>/dev/null; then
       echo "WARNING: Uncommitted changes in $worktree_path"
@@ -486,12 +467,20 @@ EOF
     fi
   fi
 
-  # Stop and remove containers + volumes
-  local compose_file="$worktree_path/.devcontainer/docker-compose.yml"
-  [ -f "$compose_file" ] && { echo "Stopping containers..."; docker compose -f "$compose_file" down -v 2>/dev/null || true; }
+  # Stop and remove containers
+  echo "Stopping containers..."
+  local container_ids
+  container_ids=$(docker ps -a --filter "label=dev-worktree=$registry_key" -q 2>/dev/null || true)
+  [ -n "$container_ids" ] && echo "$container_ids" | xargs docker rm -f 2>/dev/null || true
+
+  # Also try compose if available
+  if [ -n "$worktree_path" ]; then
+    local compose_file="$worktree_path/.devcontainer/docker-compose.yml"
+    [ -f "$compose_file" ] && docker compose -f "$compose_file" down -v 2>/dev/null || true
+  fi
 
   # Remove worktree
-  if [ -d "$worktree_path" ]; then
+  if [ -n "$worktree_path" ] && [ -d "$worktree_path" ]; then
     echo "Removing worktree..."
     if [ "$force" = true ]; then
       git -C "$project_dir" worktree remove --force "$worktree_path" 2>/dev/null || true
@@ -499,7 +488,7 @@ EOF
       git -C "$project_dir" worktree remove "$worktree_path" 2>/dev/null || true
     fi
   fi
-  git -C "$project_dir" worktree prune 2>/dev/null || true
+  [ -n "$project_dir" ] && git -C "$project_dir" worktree prune 2>/dev/null || true
 
   # Delete branch if merged
   if [ -n "$name" ] && [ -n "$project_dir" ]; then
@@ -542,7 +531,7 @@ EOF
   # Query containers with dev-worktree label
   local containers
   containers=$(docker ps -a --filter "label=dev-worktree" \
-    --format '{{.Label "dev-worktree"}}\t{{.Label "devcontainer.local_folder"}}\t{{.State}}\t{{.Names}}' 2>/dev/null || true)
+    --format '{{.Label "dev-worktree"}}\t{{.Label "dev-worktree.path"}}\t{{.State}}\t{{.Names}}' 2>/dev/null || true)
 
   if [ -z "$containers" ]; then
     echo "No dev-worktree environments found."
@@ -648,12 +637,14 @@ EOF
 # ─── dev open ─────────────────────────────────────────────────
 
 _container_is_running() {
-  local wt_path="$1"
-  local compose_file="$wt_path/.devcontainer/docker-compose.yml"
-  [ -f "$compose_file" ] || return 1
-  local running
-  running=$(docker compose -f "$compose_file" ps --status running -q 2>/dev/null | wc -l | tr -d ' ')
-  [ "$running" -gt 0 ]
+  local key_or_path="$1"
+  # Try by dev-worktree label first
+  local count
+  count=$(docker ps --filter "label=dev-worktree=$key_or_path" --filter "status=running" -q 2>/dev/null | wc -l | tr -d ' ')
+  [ "$count" -gt 0 ] && return 0
+  # Fallback: try by dev-worktree.path label
+  count=$(docker ps --filter "label=dev-worktree.path=$key_or_path" --filter "status=running" -q 2>/dev/null | wc -l | tr -d ' ')
+  [ "$count" -gt 0 ]
 }
 
 # Get WT_EXEC_CMD for a registry key (fallback: claude)
@@ -681,7 +672,7 @@ _watcher() {
     # Query containers with dev-worktree label
     local containers
     containers=$(docker ps -a --filter "label=dev-worktree" \
-      --format '{{.Label "dev-worktree"}}\t{{.Label "devcontainer.local_folder"}}\t{{.State}}' 2>/dev/null || true)
+      --format '{{.Label "dev-worktree"}}\t{{.Label "dev-worktree.path"}}\t{{.State}}' 2>/dev/null || true)
 
     if [ -z "$containers" ]; then
       echo "No environments. Run 'dev up <name>' in another terminal."
@@ -797,11 +788,19 @@ EOF
     local worktree_dir
     worktree_dir="$(dirname "$project_dir")/${project_name}-${name}"
 
-    [ ! -d "$worktree_dir" ] && { echo "ERROR: Worktree '$name' not found at $worktree_dir" >&2; return 1; }
-
-    _container_is_running "$worktree_dir" || { echo "ERROR: Container not running. Run 'dev up $name' first." >&2; return 1; }
-
     local registry_key="${project_name}/${name}"
+
+    _container_is_running "$registry_key" || _container_is_running "$worktree_dir" || \
+      { echo "ERROR: Container not running. Run 'dev up $name' first." >&2; return 1; }
+
+    # Resolve worktree_dir from docker label if directory doesn't exist
+    if [ ! -d "$worktree_dir" ]; then
+      local label_path
+      label_path=$(docker ps --filter "label=dev-worktree=$registry_key" --filter "status=running" \
+        --format '{{.Label "dev-worktree.path"}}' 2>/dev/null | head -1)
+      [ -n "$label_path" ] && worktree_dir="$label_path"
+      [ ! -d "$worktree_dir" ] && { echo "ERROR: Worktree '$name' not found." >&2; return 1; }
+    fi
     local exec_cmd
     exec_cmd=$(_get_exec_cmd "$registry_key")
 
