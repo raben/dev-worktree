@@ -98,12 +98,12 @@ cmd_up() {
       --project-dir) project_dir="$2"; shift 2 ;;
       -h|--help)
         cat <<EOF
-Usage: dev up [OPTIONS] <name> [base-branch]
+Usage: dev up [OPTIONS] [name] [base-branch]
 
 Create a worktree, start its devcontainer, and launch Claude inside.
 
 Arguments:
-  name          Worktree / branch name
+  name          Worktree / branch name (auto-generated if omitted)
   base-branch   Base branch (default: main)
 
 Options:
@@ -115,7 +115,7 @@ EOF
     esac
   done
 
-  [ -z "$name" ] && { echo "ERROR: Name is required. Usage: dev up <name> [base-branch]" >&2; return 1; }
+  [ -z "$name" ] && name="wt-$(head -c 4 /dev/urandom | xxd -p)"
 
   if [ -z "$project_dir" ]; then
     project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
@@ -518,7 +518,7 @@ Usage: dev <command> [options]
 
 Commands:
   init               Generate .devcontainer/ for this project
-  up <name> [base]   Create worktree + start devcontainer
+  up [name] [base]   Create worktree + start devcontainer
   down <name>        Stop devcontainer + remove worktree
   list               Show active worktrees
   ports              Manage port allocations
