@@ -214,11 +214,13 @@ EOF
         echo "Container already running."
       else
         echo "Starting devcontainer..."
-        devcontainer up --workspace-folder "$worktree_dir"
+        devcontainer up --workspace-folder "$worktree_dir" \
+          --id-label "dev-worktree=$registry_key"
       fi
     else
       echo "Starting devcontainer..."
-      devcontainer up --workspace-folder "$worktree_dir"
+      devcontainer up --workspace-folder "$worktree_dir" \
+        --id-label "dev-worktree=$registry_key"
     fi
 
     # Ensure registry entry exists (may be missing after upgrade or manual setup)
@@ -293,9 +295,10 @@ EOF
     fi
   fi
 
-  # Start devcontainer
+  # Start devcontainer with dev-worktree label
   echo "Starting devcontainer..."
-  devcontainer up --workspace-folder "$worktree_dir"
+  devcontainer up --workspace-folder "$worktree_dir" \
+    --id-label "dev-worktree=$registry_key"
 
   # Disable cleanup — worktree created successfully
   _cleanup_enabled=false
@@ -474,7 +477,7 @@ cmd_list() {
         cat <<EOF
 Usage: dev list [OPTIONS]
 
-List active worktrees with port and container status.
+List dev-worktree environments (detected via container labels).
 
 Options:
   --project-dir DIR   Filter by project
@@ -485,48 +488,61 @@ EOF
     esac
   done
 
-  registry_ensure
-  local registry
-  registry=$(cat "$REGISTRY_FILE")
-  local count
-  count=$(echo "$registry" | jq '.allocations | length')
+  # Query containers with dev-worktree label
+  local containers
+  containers=$(docker ps -a --filter "label=dev-worktree" \
+    --format '{{.Label "dev-worktree"}}\t{{.Label "devcontainer.local_folder"}}\t{{.State}}\t{{.Names}}' 2>/dev/null || true)
 
-  if [ "$count" -eq 0 ]; then
-    echo "No active worktrees."
+  if [ -z "$containers" ]; then
+    echo "No dev-worktree environments found."
     return 0
   fi
 
   if [ -n "$project_dir" ]; then
     local pn
     pn=$(basename "$project_dir")
-    registry=$(echo "$registry" | jq --arg pn "$pn" '{
-      allocations: (.allocations | to_entries | map(select(.key | startswith($pn + "/"))) | from_entries)
-    }')
+    containers=$(echo "$containers" | { grep "^${pn}/" || true; })
+    if [ -z "$containers" ]; then
+      echo "No dev-worktree environments found for $pn."
+      return 0
+    fi
   fi
 
   if [ "$json_output" = true ]; then
-    echo "$registry" | jq '.allocations'
+    local json="[]"
+    while IFS=$'\t' read -r key wt_path state cname; do
+      [ -z "$key" ] && continue
+      json=$(echo "$json" | jq \
+        --arg k "$key" --arg p "$wt_path" --arg s "$state" --arg c "$cname" \
+        '. + [{"key": $k, "path": $p, "state": $s, "container": $c}]')
+    done <<< "$containers"
+    echo "$json" | jq .
     return 0
   fi
 
-  printf "%-25s %-20s %-35s %-10s %s\n" "NAME" "BRANCH" "PORTS" "STATUS" "PATH"
-  printf "%-25s %-20s %-35s %-10s %s\n" "----" "------" "-----" "------" "----"
+  printf "%-25s %-10s %-35s %s\n" "NAME" "STATUS" "PORTS" "PATH"
+  printf "%-25s %-10s %-35s %s\n" "----" "------" "-----" "----"
 
-  echo "$registry" | jq -r '.allocations | to_entries[] | [
-    .key,
-    .value.worktree_path,
-    (.value.ports | to_entries | map("\(.key | gsub("WT_";"") | gsub("_PORT";""))=\(.value)") | join(", "))
-  ] | @tsv' | while IFS=$'\t' read -r key wt_path ports; do
-    local branch="${key#*/}"
-    local status="unknown"
-    local cf="$wt_path/.devcontainer/docker-compose.yml"
-    if [ -f "$cf" ]; then
-      local running
-      running=$(docker compose -f "$cf" ps --status running -q 2>/dev/null | wc -l | tr -d ' ')
-      [ "$running" -gt 0 ] && status="running" || status="stopped"
-    fi
-    printf "%-25s %-20s %-35s %-10s %s\n" "$key" "$branch" "$ports" "$status" "$wt_path"
-  done
+  # Collect unique keys (multiple containers per environment)
+  local seen_keys=""
+  while IFS=$'\t' read -r key wt_path state cname; do
+    [ -z "$key" ] && continue
+    echo "$seen_keys" | grep -qFx "$key" && continue
+    seen_keys=$(printf '%s\n%s' "$seen_keys" "$key")
+
+    local status="stopped"
+    # Check if any container for this key is running
+    echo "$containers" | grep "^${key}"$'\t' | grep -q "running" && status="running"
+
+    # Get ports from registry if available
+    local ports=""
+    registry_ensure
+    ports=$(jq -r --arg k "$key" \
+      '.allocations[$k].ports // {} | to_entries | map("\(.key | gsub("WT_";"") | gsub("_PORT";""))=\(.value)") | join(", ")' \
+      "$REGISTRY_FILE" 2>/dev/null || true)
+
+    printf "%-25s %-10s %-35s %s\n" "$key" "$status" "$ports" "$wt_path"
+  done <<< "$containers"
 }
 
 # ─── dev ports ─────────────────────────────────────────────────
@@ -611,33 +627,34 @@ _watcher() {
     echo "dev-worktree dashboard  (poll: 3s)"
     echo ""
 
-    registry_ensure
-    local registry
-    registry=$(cat "$REGISTRY_FILE")
-    local keys
-    keys=$(jq -r '.allocations | keys[]' "$REGISTRY_FILE" 2>/dev/null || true)
+    # Query containers with dev-worktree label
+    local containers
+    containers=$(docker ps -a --filter "label=dev-worktree" \
+      --format '{{.Label "dev-worktree"}}\t{{.Label "devcontainer.local_folder"}}\t{{.State}}' 2>/dev/null || true)
 
-    local count
-    count=$(echo "$registry" | jq '.allocations | length')
-
-    if [ "$count" -eq 0 ]; then
+    if [ -z "$containers" ]; then
       echo "No environments. Run 'dev up <name>' in another terminal."
     else
       printf "  %-25s %-10s %s\n" "NAME" "STATUS" "PORTS"
       printf "  %-25s %-10s %s\n" "----" "------" "-----"
 
-      while IFS= read -r key; do
+      local seen_keys=""
+      while IFS=$'\t' read -r key wt_path state; do
         [ -z "$key" ] && continue
-        local wt_path
-        wt_path=$(echo "$registry" | jq -r --arg k "$key" '.allocations[$k].worktree_path')
-        local ports
-        ports=$(echo "$registry" | jq -r --arg k "$key" '.allocations[$k].ports | to_entries | map("\(.key | gsub("WT_";"") | gsub("_PORT";""))=\(.value)") | join(", ")' 2>/dev/null || true)
+        echo "$seen_keys" | grep -qFx "$key" && continue
+        seen_keys=$(printf '%s\n%s' "$seen_keys" "$key")
 
         local status="stopped"
-        _container_is_running "$wt_path" && status="running"
+        echo "$containers" | grep "^${key}"$'\t' | grep -q "running" && status="running"
+
+        local ports=""
+        registry_ensure
+        ports=$(jq -r --arg k "$key" \
+          '.allocations[$k].ports // {} | to_entries | map("\(.key | gsub("WT_";"") | gsub("_PORT";""))=\(.value)") | join(", ")' \
+          "$REGISTRY_FILE" 2>/dev/null || true)
 
         printf "  %-25s %-10s %s\n" "$key" "$status" "$ports"
-      done <<< "$keys"
+      done <<< "$containers"
     fi
 
     echo ""
@@ -647,17 +664,13 @@ _watcher() {
     local existing_titles
     existing_titles=$(tmux list-panes -t "$session" -F '#{pane_title}' 2>/dev/null || true)
 
-    while IFS= read -r key; do
+    while IFS=$'\t' read -r key wt_path state; do
       [ -z "$key" ] && continue
+      [ "$state" != "running" ] && continue
       [ -n "$filter" ] && [[ "$key" != *"$filter"* ]] && continue
-
       echo "$existing_titles" | grep -qFx "$key" && continue
 
-      local wt_path
-      wt_path=$(jq -r --arg k "$key" '.allocations[$k].worktree_path' "$REGISTRY_FILE" 2>/dev/null)
       [ -z "$wt_path" ] || [ "$wt_path" = "null" ] && continue
-
-      _container_is_running "$wt_path" || continue
 
       local exec_cmd
       exec_cmd=$(_get_exec_cmd "$key")
@@ -667,7 +680,7 @@ _watcher() {
         'printf "\033]2;${DEV_KEY}\033\\"; devcontainer exec --workspace-folder "${DEV_WT_PATH}" ${DEV_EXEC_CMD}; echo "--- Session ended (${DEV_KEY}). Press Enter to close. ---"; read'
       tmux select-pane -T "$key"
       tmux select-layout -t "$session" tiled
-    done <<< "$keys"
+    done <<< "$containers"
 
     sleep 3
   done
