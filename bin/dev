@@ -387,6 +387,18 @@ EOF
     fi
   fi
 
+  # Validate container_name uses WT_NAME (prevent name conflicts across worktrees)
+  local compose_file_check="$worktree_dir/.devcontainer/docker-compose.yml"
+  if [ -f "$compose_file_check" ]; then
+    local hardcoded_names=""
+    hardcoded_names=$(grep 'container_name:' "$compose_file_check" 2>/dev/null | grep -v 'WT_NAME' || true)
+    if [ -n "$hardcoded_names" ]; then
+      echo "WARNING: docker-compose.yml has hardcoded container_name (may conflict with other worktrees):" >&2
+      echo "$hardcoded_names" | sed 's/^/  /' >&2
+      echo "  Tip: Use \${WT_NAME:-default} pattern. Run 'dev init' to regenerate." >&2
+    fi
+  fi
+
   # Start devcontainer
   echo "Starting devcontainer..."
   devcontainer up --workspace-folder "$worktree_dir" \
@@ -1081,6 +1093,18 @@ docker-compose.yml"
       _doc_pass ".env.example"
     else
       _doc_fail ".env.example not found — Run 'dev init' to regenerate"
+    fi
+
+    # Check container_name uses WT_NAME pattern
+    local _compose="$_project_dir/.devcontainer/docker-compose.yml"
+    if [ -f "$_compose" ]; then
+      local _hardcoded=""
+      _hardcoded=$(grep 'container_name:' "$_compose" 2>/dev/null | grep -v 'WT_NAME' || true)
+      if [ -n "$_hardcoded" ]; then
+        _doc_fail "container_name is hardcoded (will conflict across worktrees) — Use \${WT_NAME:-name} pattern"
+      else
+        _doc_pass "container_name uses \${WT_NAME} pattern"
+      fi
     fi
   fi
 
