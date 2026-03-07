@@ -255,6 +255,14 @@ EOF
     return 1
   fi
 
+  # ── Current branch in main repo: use project_dir directly ──
+  local current_branch
+  current_branch=$(git -C "$project_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ "$name" = "$current_branch" ] && [ ! -d "$worktree_dir" ]; then
+    echo "Branch '$name' is checked out in main repo. Using $project_dir directly."
+    worktree_dir="$project_dir"
+  fi
+
   # ── Existing worktree: resume ──
   if [ -d "$worktree_dir" ]; then
     echo "Worktree '$name' already exists at $worktree_dir"
