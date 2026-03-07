@@ -227,6 +227,13 @@ EOF
     name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
     [ -z "$name" ] || [ "$name" = "HEAD" ] && name="dev-$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')"
   fi
+
+  # Sanitize: replace path separators and dots with hyphens
+  local original_name="$name"
+  name=$(printf '%s' "$name" | tr '/' '-')
+  if [ "$name" != "$original_name" ]; then
+    echo "Sanitized '$original_name' → '$name'"
+  fi
   _validate_name "$name"
 
   if [ -z "$project_dir" ]; then
@@ -630,8 +637,8 @@ EOF
     return 0
   fi
 
-  printf "%-25s %-10s %-35s %s\n" "NAME" "STATUS" "PORTS" "PATH"
-  printf "%-25s %-10s %-35s %s\n" "----" "------" "-----" "----"
+  printf "%-25s %-15s %-10s %s\n" "BRANCH" "PROJECT" "STATUS" "PORTS"
+  printf "%-25s %-15s %-10s %s\n" "------" "-------" "------" "-----"
 
   local _seen=""
   local key="" wt_path="" state="" cname=""
@@ -646,7 +653,9 @@ EOF
     local ports=""
     [ -n "$wt_path" ] && ports=$(_get_ports_from_env "$wt_path")
 
-    printf "%-25s %-10s %-35s %s\n" "$key" "$status" "$ports" "$wt_path"
+    local _project="${key%%/*}"
+    local _branch="${key#*/}"
+    printf "%-25s %-15s %-10s %s\n" "$_branch" "$_project" "$status" "$ports"
   done <<< "$containers"
 }
 
