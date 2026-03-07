@@ -144,6 +144,20 @@ your-project-feature-billing/
 
 worktree はメインリポジトリと同階層に `<project>-<name>` の形で作られる。
 
+## ブランチ命名規則
+
+`dev up` で作成される git ブランチは `dev/<project>/<name>` の形式になる。
+
+```bash
+dev up feature-auth
+# → ブランチ: dev/your-project/feature-auth
+# → worktree: your-project-feature-auth/
+```
+
+- `git branch` で `dev/` 配下に全環境がまとまる
+- `dev/your-project/*` でプロジェクト別にフィルタできる
+- ツール内部の dev ID（`your-project/feature-auth`）とは独立
+
 ## License
 
 MIT

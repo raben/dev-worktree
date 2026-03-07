@@ -246,6 +246,7 @@ EOF
   local worktree_dir
   worktree_dir="$(dirname "$project_dir")/${project_name}-${name}"
   local dev_key="${project_name}/${name}"
+  local branch_name="dev/${project_name}/${name}"
 
   # Validate worktree_dir is within expected parent (defense against path traversal)
   local expected_parent
@@ -272,12 +273,14 @@ EOF
       name="$dev_name"
       worktree_dir="$dev_worktree_dir"
       dev_key="${project_name}/${name}"
+      branch_name="dev/${project_name}/${name}"
     elif [ ! -d "$worktree_dir" ]; then
       # New: create dev-<branch> from protected branch
       base_branch="$name"
       name="$dev_name"
       worktree_dir="$dev_worktree_dir"
       dev_key="${project_name}/${name}"
+      branch_name="dev/${project_name}/${name}"
       echo "Protected branch '$base_branch'. Creating '$name' from '$base_branch'."
     fi
   fi
@@ -331,7 +334,7 @@ EOF
         git -C "$project_dir" worktree remove --force "$worktree_dir" 2>/dev/null || true
       fi
       if [ "$_branch_created" = true ]; then
-        git -C "$project_dir" branch -D "$name" 2>/dev/null || true
+        git -C "$project_dir" branch -D "$branch_name" 2>/dev/null || true
       fi
       # Clean up temp files
       rm -f "${worktree_dir}/.devcontainer/docker-compose.yml.tmp" 2>/dev/null || true
@@ -353,10 +356,10 @@ EOF
 
   # Create worktree
   echo "Creating worktree..."
-  if git -C "$project_dir" show-ref --verify --quiet "refs/heads/$name" 2>/dev/null; then
-    git -C "$project_dir" worktree add "$worktree_dir" "$name"
+  if git -C "$project_dir" show-ref --verify --quiet "refs/heads/$branch_name" 2>/dev/null; then
+    git -C "$project_dir" worktree add "$worktree_dir" "$branch_name"
   else
-    git -C "$project_dir" worktree add "$worktree_dir" -b "$name" -- "$base_branch"
+    git -C "$project_dir" worktree add "$worktree_dir" -b "$branch_name" -- "$base_branch"
     _branch_created=true
   fi
 
@@ -501,6 +504,7 @@ EOF
   local worktree_path
   worktree_path=$(_get_wt_path "$dev_key")
   local name="${dev_key#*/}"
+  local branch_name="dev/${dev_key}"
 
   # Derive project_dir from worktree_path (more reliable than CWD)
   local project_dir=""
@@ -570,10 +574,10 @@ EOF
 
   # Delete branch if merged
   if [ -n "$name" ] && [ -n "$project_dir" ]; then
-    if git -C "$project_dir" branch -d "$name" 2>/dev/null; then
-      echo "Branch '$name' deleted (merged)."
+    if git -C "$project_dir" branch -d "$branch_name" 2>/dev/null; then
+      echo "Branch '$branch_name' deleted (merged)."
     else
-      echo "Branch '$name' kept (not merged). Use: git branch -D $name"
+      echo "Branch '$branch_name' kept (not merged). Use: git branch -D $branch_name"
     fi
   fi
 
