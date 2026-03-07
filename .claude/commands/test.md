@@ -7,6 +7,8 @@ dev-worktree の e2e テスト。テスト用 git リポを作成し、dev up/li
 
 **重要:** `devcontainer up` は初回数分かかる。各 `dev up` コマンドはタイムアウト 600秒（10分）で実行すること。
 
+**重要:** テストではインストール済みの `dev` ではなく、ローカルの開発版を使うこと。全ての `dev` コマンドは `$PROJECT_DIR/bin/dev` を直接実行する（`PROJECT_DIR` はこのリポジトリのルート）。
+
 ## 前提条件チェック
 
 以下を確認し、満たさない場合は中止：
@@ -73,7 +75,7 @@ git commit -m "add devcontainer"
 2. 検証:
    - exit code が 0
    - ワークツリーディレクトリ `/tmp/dev-worktree-test-test-new-branch` が存在する
-   - git branch `test-new-branch` が作成されている（`git -C /tmp/dev-worktree-test branch --list test-new-branch` が非空）
+   - git branch `dev/dev-worktree-test/test-new-branch` が作成されている（`git -C /tmp/dev-worktree-test branch --list 'dev/dev-worktree-test/test-new-branch'` が非空）
    - コンテナが起動している（`docker ps --filter "label=dev-worktree=dev-worktree-test/test-new-branch" --filter "status=running" -q` が非空）
    - `.devcontainer/.env` がワークツリー側（`/tmp/dev-worktree-test-test-new-branch/.devcontainer/.env`）に存在し、`WT_APP_PORT=` を含む
 
@@ -81,7 +83,7 @@ git commit -m "add devcontainer"
 
 v0.9.2 で発生したバグの再発防止。既存ブランチに対して `-b` なしで worktree add されるか。
 
-1. 準備: `git -C /tmp/dev-worktree-test branch test-existing`
+1. 準備: `git -C /tmp/dev-worktree-test branch dev/dev-worktree-test/test-existing`
 2. 実行: `cd /tmp/dev-worktree-test && dev up test-existing`（タイムアウト 600秒）
 3. 検証:
    - exit code が 0
