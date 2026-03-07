@@ -491,19 +491,16 @@ EOF
 # ─── dev prune ─────────────────────────────────────────────────
 
 cmd_prune() {
-  local dev_key="" force=false
+  local dev_key=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --force|-f)    force=true; shift ;;
       -h|--help)
         cat <<EOF
-Usage: dev prune [OPTIONS] [name]
+Usage: dev prune [name]
 
 Remove worktree, containers, and branch.
-
-Options:
-  --force, -f         Skip uncommitted changes check
+Prompts for confirmation before deleting.
 EOF
         return 0 ;;
       -*) echo "Unknown option: $1" >&2; return 1 ;;
@@ -519,6 +516,7 @@ EOF
   local worktree_path
   worktree_path=$(_get_wt_path "$dev_key")
   local name="${dev_key#*/}"
+  local project_name="${dev_key%%/*}"
   local branch_name="dev/${dev_key}"
 
   # Derive project_dir from worktree_path (more reliable than CWD)
@@ -537,22 +535,31 @@ EOF
     project_dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
   fi
 
-  echo "Removing '$dev_key'..."
+  # Fallback: if container was removed manually, infer worktree_path from project_dir
+  if [ -z "$worktree_path" ] && [ -n "$project_dir" ]; then
+    local inferred="$(dirname "$project_dir")/${project_name}-${name}"
+    if [ -d "$inferred" ]; then
+      worktree_path="$inferred"
+    fi
+  fi
 
-  # Check uncommitted changes
-  if [ -n "$worktree_path" ] && [ -d "$worktree_path" ] && [ "$force" = false ]; then
+  # Confirmation (1st)
+  local confirm=""
+  read -rp "Remove '$dev_key'? (y/N) " confirm
+  [[ "$confirm" != [yY]* ]] && { echo "Aborted."; return 1; }
+
+  # Confirmation (2nd) — uncommitted changes
+  if [ -n "$worktree_path" ] && [ -d "$worktree_path" ]; then
     if ! git -C "$worktree_path" diff --quiet 2>/dev/null || \
        ! git -C "$worktree_path" diff --cached --quiet 2>/dev/null; then
       echo "WARNING: Uncommitted changes in $worktree_path"
-      echo "  Continuing will permanently delete these changes."
-      if [ -t 0 ]; then
-        read -rp "Continue? (y/N) " confirm
-        [[ "$confirm" != [yY]* ]] && { echo "Aborted."; return 1; }
-      else
-        echo "Use --force to skip." >&2; return 1
-      fi
+      echo "  These changes will be permanently lost."
+      read -rp "Are you sure you want to delete? (y/N) " confirm
+      [[ "$confirm" != [yY]* ]] && { echo "Aborted."; return 1; }
     fi
   fi
+
+  echo "Removing '$dev_key'..."
 
   # Stop and remove containers + volumes
   echo "Stopping containers..."
@@ -577,7 +584,7 @@ EOF
   if [ -n "$worktree_path" ] && [ -d "$worktree_path" ]; then
     echo "Removing worktree..."
     if [ -n "$project_dir" ]; then
-      # Always use --force: if we reach here, the user already confirmed (or passed --force)
+      # Always use --force: if we reach here, the user already confirmed
       git -C "$project_dir" worktree remove --force "$worktree_path" 2>/dev/null || true
     fi
     # Fallback: if git worktree remove failed, remove directory directly
