@@ -259,7 +259,7 @@ EOF
   local protected_branches="main master develop"
   if [[ " $protected_branches " == *" $name "* ]] && [ ! -d "$worktree_dir" ]; then
     base_branch="$name"
-    name="wt-$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')"
+    name="wt-${name}"
     worktree_dir="$(dirname "$project_dir")/${project_name}-${name}"
     dev_key="${project_name}/${name}"
     echo "Protected branch '$base_branch'. Creating '$name' from '$base_branch'."

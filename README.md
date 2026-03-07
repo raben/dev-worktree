@@ -77,9 +77,9 @@ dev up feature-billing
 # 既存の worktree は自動で再利用（コンテナが停止していれば再起動）
 dev up feature-auth
 
-# main/master/develop を指定すると、自動でブランチを作成
-dev up main          # → wt-a1b2c3d4 ブランチを main から作成
-dev up develop       # → wt-e5f6g7h8 ブランチを develop から作成
+# main/master/develop を指定すると、自動でブランチを作成（2回目以降は再利用）
+dev up main          # → wt-main ブランチを main から作成
+dev up develop       # → wt-develop ブランチを develop から作成
 ```
 
 ### 3. AI セッションを開く
