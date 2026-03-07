@@ -328,8 +328,12 @@ EOF
 
   # Create worktree
   echo "Creating worktree..."
-  git -C "$project_dir" worktree add "$worktree_dir" -b "$name" -- "$base_branch"
-  _branch_created=true
+  if git -C "$project_dir" show-ref --verify --quiet "refs/heads/$name" 2>/dev/null; then
+    git -C "$project_dir" worktree add "$worktree_dir" "$name"
+  else
+    git -C "$project_dir" worktree add "$worktree_dir" -b "$name" -- "$base_branch"
+    _branch_created=true
+  fi
 
   # Copy .devcontainer from project root to worktree.
   # This overwrites the git-checked-out version with the canonical template,
