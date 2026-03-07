@@ -588,6 +588,8 @@ EOF
     if ! git -C "$worktree_path" diff --quiet 2>/dev/null || \
        ! git -C "$worktree_path" diff --cached --quiet 2>/dev/null; then
       echo "WARNING: Uncommitted changes in $worktree_path"
+      git -C "$worktree_path" diff --stat 2>/dev/null
+      git -C "$worktree_path" diff --cached --stat 2>/dev/null
       echo "  These changes will be permanently lost."
       read -rp "Are you sure you want to delete? (y/N) " confirm
       [[ "$confirm" != [yY]* ]] && { echo "Aborted."; return 1; }
