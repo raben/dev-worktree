@@ -4,7 +4,7 @@ set -euo pipefail
 # dev - Isolated parallel development environments
 # Usage: dev <command> [options]
 
-VERSION="0.10.0"
+VERSION="0.10.1"
 
 # ─── Debug mode ─────────────────────────────────────────────
 # Set DEV_DEBUG=1 to enable trace output for troubleshooting.
@@ -449,6 +449,21 @@ EOF
     fi
   else
     rm -f "$_dc_log"
+  fi
+
+  # Fix Docker volume ownership (volumes are initialized as root:root,
+  # but remoteUser needs write access, e.g. ~/.claude for Claude Code)
+  local _cid
+  _cid=$(docker ps -q --filter "label=dev-worktree=$dev_key" 2>/dev/null | head -1)
+  if [ -n "$_cid" ]; then
+    docker exec -u root "$_cid" sh -c '
+      for d in /home/*/.claude; do
+        [ -d "$d" ] || continue
+        parent_owner=$(stat -c %u:%g "$(dirname "$d")")
+        cur_owner=$(stat -c %u:%g "$d")
+        [ "$cur_owner" != "$parent_owner" ] && chown "$parent_owner" "$d"
+      done
+    ' 2>/dev/null || true
   fi
 
   # Disable cleanup — worktree created successfully
