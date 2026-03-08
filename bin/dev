@@ -4,7 +4,7 @@ set -euo pipefail
 # dev - Isolated parallel development environments
 # Usage: dev <command> [options]
 
-VERSION="0.9.9"
+VERSION="0.10.0"
 
 # ─── Debug mode ─────────────────────────────────────────────
 # Set DEV_DEBUG=1 to enable trace output for troubleshooting.
@@ -264,16 +264,15 @@ EOF
 
   local project_name
   project_name=$(basename "$project_dir")
-  local worktree_dir
-  worktree_dir="$(dirname "$project_dir")/${project_name}-${name}"
   local dev_key="${project_name}/${name}"
   local branch_name="dev/${project_name}/${name}"
+  local worktree_dir
+  worktree_dir="$(dirname "$project_dir")/dev/${project_name}/${name}"
 
   # Validate worktree_dir is within expected parent (defense against path traversal)
   local expected_parent
   expected_parent=$(cd "$(dirname "$project_dir")" && pwd)
-  local resolved_wt_dir
-  resolved_wt_dir=$(cd "$(dirname "$project_dir")" && mkdir -p "$(dirname "${project_name}-${name}")" 2>/dev/null; cd "$(dirname "$project_dir")" && echo "$(pwd)/${project_name}-${name}")
+  local resolved_wt_dir="${expected_parent}/dev/${project_name}/${name}"
   case "$resolved_wt_dir" in
     "$expected_parent"/*) ;; # ok
     *) echo "ERROR: Worktree path escapes expected parent directory." >&2; return 1 ;;
@@ -284,31 +283,16 @@ EOF
     return 1
   fi
 
-  # ── Protected branches: auto-generate a feature branch ──
+  # ── Protected branches: create new branch from it instead of checking out directly ──
   local protected_branches="main master develop"
-  if [[ " $protected_branches " == *" $name "* ]]; then
-    local dev_name="dev-${name}"
-    local dev_worktree_dir="$(dirname "$project_dir")/${project_name}-${dev_name}"
-    if [ -d "$dev_worktree_dir" ]; then
-      # Existing dev-<branch>: resume directly
-      name="$dev_name"
-      worktree_dir="$dev_worktree_dir"
-      dev_key="${project_name}/${name}"
-      branch_name="dev/${project_name}/${name}"
-    elif [ ! -d "$worktree_dir" ]; then
-      # New: create dev-<branch> from protected branch
-      base_branch="$name"
-      name="$dev_name"
-      worktree_dir="$dev_worktree_dir"
-      dev_key="${project_name}/${name}"
-      branch_name="dev/${project_name}/${name}"
-      echo "Protected branch '$base_branch'. Creating '$name' from '$base_branch'."
-    fi
+  if [[ " $protected_branches " == *" $name "* ]] && [ ! -d "$worktree_dir" ]; then
+    base_branch="$name"
+    echo "Protected branch '$base_branch'. Creating '${branch_name}' from '$base_branch'."
   fi
 
   # ── Existing worktree: resume ──
   if [ -d "$worktree_dir" ]; then
-    echo "Worktree '$name' already exists at $worktree_dir"
+    echo "Worktree '${branch_name}' already exists at $worktree_dir"
 
     # Remove exited containers before resuming (prevents stale state)
     local exited_ids
@@ -321,7 +305,7 @@ EOF
       echo "Container already running."
     else
       local _dc_log
-      _dc_log=$(mktemp /tmp/dev-worktree-dc-XXXXXX.log)
+      _dc_log=$(mktemp /tmp/dev-worktree-dc-XXXXXX)
       _spinner_start "Starting devcontainer"
       if devcontainer up --workspace-folder "$worktree_dir" \
         --id-label "dev-worktree=$dev_key" \
@@ -399,6 +383,19 @@ EOF
   echo "Setting up devcontainer..."
   cp -r "$project_dir/.devcontainer" "$worktree_dir/.devcontainer"
 
+  # Validate container_name uses WT_NAME (prevent name conflicts across worktrees)
+  # Check BEFORE variable substitution, using the original project source
+  local compose_file_check="$project_dir/.devcontainer/docker-compose.yml"
+  if [ -f "$compose_file_check" ]; then
+    local hardcoded_names=""
+    hardcoded_names=$(grep 'container_name:' "$compose_file_check" 2>/dev/null | grep -v 'WT_NAME' || true)
+    if [ -n "$hardcoded_names" ]; then
+      echo "WARNING: docker-compose.yml has hardcoded container_name (may conflict with other worktrees):" >&2
+      echo "$hardcoded_names" | sed 's/^/  /' >&2
+      echo "  Tip: Use \${WT_NAME:-default} pattern. Run 'dev init' to regenerate." >&2
+    fi
+  fi
+
   if [ -n "$allocated_vars" ]; then
     allocated_vars=$(printf '%s\nWT_NAME=%s\nCOMPOSE_PROJECT_NAME=%s' \
       "$allocated_vars" "${project_name}-${name}" "${project_name}-${name}")
@@ -427,22 +424,10 @@ EOF
     fi
   fi
 
-  # Validate container_name uses WT_NAME (prevent name conflicts across worktrees)
-  local compose_file_check="$worktree_dir/.devcontainer/docker-compose.yml"
-  if [ -f "$compose_file_check" ]; then
-    local hardcoded_names=""
-    hardcoded_names=$(grep 'container_name:' "$compose_file_check" 2>/dev/null | grep -v 'WT_NAME' || true)
-    if [ -n "$hardcoded_names" ]; then
-      echo "WARNING: docker-compose.yml has hardcoded container_name (may conflict with other worktrees):" >&2
-      echo "$hardcoded_names" | sed 's/^/  /' >&2
-      echo "  Tip: Use \${WT_NAME:-default} pattern. Run 'dev init' to regenerate." >&2
-    fi
-  fi
-
   # Start devcontainer
   local _dc_exit=0
   local _dc_log
-  _dc_log=$(mktemp /tmp/dev-worktree-dc-XXXXXX.log)
+  _dc_log=$(mktemp /tmp/dev-worktree-dc-XXXXXX)
   _spinner_start "Starting devcontainer"
   devcontainer up --workspace-folder "$worktree_dir" \
     --id-label "dev-worktree=$dev_key" \
@@ -475,7 +460,7 @@ EOF
   echo ""
   echo "=== Worktree created ==="
   echo "  Path:   $worktree_dir"
-  echo "  Branch: $name"
+  echo "  Branch: $branch_name"
   if [ -n "$allocated_vars" ]; then
     echo "  Ports:"
     echo "$allocated_vars" | { grep '_PORT=' || true; } | while IFS='=' read -r k v; do echo "    $k: $v"; done
@@ -572,7 +557,7 @@ EOF
 
   # Fallback: if container was removed manually, infer worktree_path from project_dir
   if [ -z "$worktree_path" ] && [ -n "$project_dir" ]; then
-    local inferred="$(dirname "$project_dir")/${project_name}-${name}"
+    local inferred="$(dirname "$project_dir")/dev/${project_name}/${name}"
     if [ -d "$inferred" ]; then
       worktree_path="$inferred"
     fi
@@ -631,6 +616,12 @@ EOF
   fi
   if [ -n "$project_dir" ]; then
     git -C "$project_dir" worktree prune 2>/dev/null || true
+  fi
+
+  # Clean up empty parent directories (dev/project_name/, dev/)
+  if [ -n "$worktree_path" ]; then
+    rmdir "$(dirname "$worktree_path")" 2>/dev/null || true
+    rmdir "$(dirname "$(dirname "$worktree_path")")" 2>/dev/null || true
   fi
 
   # Delete branch if merged
