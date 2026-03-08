@@ -4,7 +4,7 @@ set -euo pipefail
 # dev - Isolated parallel development environments
 # Usage: dev <command> [options]
 
-VERSION="0.10.1"
+VERSION="0.10.2"
 
 # ─── Debug mode ─────────────────────────────────────────────
 # Set DEV_DEBUG=1 to enable trace output for troubleshooting.
@@ -352,7 +352,6 @@ EOF
       fi
       # Clean up temp files
       rm -f "${worktree_dir}/.devcontainer/docker-compose.yml.tmp" 2>/dev/null || true
-      rm -f "${worktree_dir}/.devcontainer/devcontainer.json.tmp" 2>/dev/null || true
       echo "If cleanup was incomplete, run: dev prune $name --force" >&2
     fi
   }
@@ -383,6 +382,16 @@ EOF
   echo "Setting up devcontainer..."
   cp -r "$project_dir/.devcontainer" "$worktree_dir/.devcontainer"
 
+  # Exclude devcontainer CLI artifacts from git status in this worktree
+  local _git_dir
+  _git_dir=$(git -C "$worktree_dir" rev-parse --git-dir 2>/dev/null)
+  if [ -n "$_git_dir" ]; then
+    mkdir -p "$_git_dir/info"
+    if ! grep -qxF '.devcontainer/.devcontainer/' "$_git_dir/info/exclude" 2>/dev/null; then
+      echo '.devcontainer/.devcontainer/' >> "$_git_dir/info/exclude"
+    fi
+  fi
+
   # Validate container_name uses WT_NAME (prevent name conflicts across worktrees)
   # Check BEFORE variable substitution, using the original project source
   local compose_file_check="$project_dir/.devcontainer/docker-compose.yml"
@@ -403,25 +412,9 @@ EOF
     install -m 600 /dev/null "$worktree_dir/.devcontainer/.env"
     printf '%s\n' "$allocated_vars" > "$worktree_dir/.devcontainer/.env"
 
-    local compose_file="$worktree_dir/.devcontainer/docker-compose.yml"
-    if [ -f "$compose_file" ]; then
-      local key="" val="" escaped_val=""
-      while IFS='=' read -r key val; do
-        [ -z "$key" ] && continue
-        if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-          echo "WARNING: Skipping invalid env key: $key" >&2
-          continue
-        fi
-        escaped_val=$(printf '%s\n' "$val" | sed 's/[&/|\\]/\\&/g')
-        sed "s|\${${key}:-[^}]*}|${escaped_val}|g" "$compose_file" > "${compose_file}.tmp" && mv "${compose_file}.tmp" "$compose_file"
-        sed "s|\${${key}}|${escaped_val}|g" "$compose_file" > "${compose_file}.tmp" && mv "${compose_file}.tmp" "$compose_file"
-      done <<< "$allocated_vars"
-    fi
-
-    local dc_json="$worktree_dir/.devcontainer/devcontainer.json"
-    if [ -f "$dc_json" ] && command -v jq &>/dev/null; then
-      jq --arg n "${project_name}-${name}" '.name = $n' "$dc_json" > "${dc_json}.tmp" && mv "${dc_json}.tmp" "$dc_json"
-    fi
+    # docker-compose reads .env from the same directory automatically,
+    # so no need to sed-replace variables in docker-compose.yml.
+    # COMPOSE_PROJECT_NAME in .env ensures unique container names.
   fi
 
   # Start devcontainer
