@@ -4,7 +4,7 @@ set -euo pipefail
 # dev - Isolated parallel development environments
 # Usage: dev <command> [options]
 
-VERSION="0.9.8"
+VERSION="0.9.9"
 
 # ─── Debug mode ─────────────────────────────────────────────
 # Set DEV_DEBUG=1 to enable trace output for troubleshooting.
@@ -702,8 +702,8 @@ EOF
     return 0
   fi
 
-  printf "%-25s %-15s %-10s %s\n" "BRANCH" "PROJECT" "STATUS" "PORTS"
-  printf "%-25s %-15s %-10s %s\n" "------" "-------" "------" "-----"
+  printf "%-35s %-10s %s\n" "ID" "STATUS" "PORTS"
+  printf "%-35s %-10s %s\n" "--" "------" "-----"
 
   local _seen=""
   local key="" wt_path="" state="" cname=""
@@ -718,9 +718,7 @@ EOF
     local ports=""
     [ -n "$wt_path" ] && ports=$(_get_ports_from_env "$wt_path")
 
-    local _project="${key%%/*}"
-    local _branch="${key#*/}"
-    printf "%-25s %-15s %-10s %s\n" "$_branch" "$_project" "$status" "$ports"
+    printf "%-35s %-10s %s\n" "$key" "$status" "$ports"
   done <<< "$containers"
 }
 
