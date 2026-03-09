@@ -4,7 +4,7 @@ set -euo pipefail
 # dev - Isolated parallel development environments
 # Usage: dev <command> [options]
 
-VERSION="0.10.2"
+VERSION="0.11.0"
 
 # ─── Debug mode ─────────────────────────────────────────────
 # Set DEV_DEBUG=1 to enable trace output for troubleshooting.
