@@ -47,7 +47,7 @@ dev-worktree のリリースフロー。VERSION bump → tag → push → Homebr
 ### Step 9: 確認
 1. リリース完了を報告
 2. 開発機: `/brew-upgrade` で更新可能
-3. 他端末: `brew update && brew upgrade dev-worktree` で更新可能（GitHub Release があるため `brew update` で検出される）
+3. 他端末: `brew upgrade dev-worktree` で更新可能
 
 ## 注意
 - CWD が `/tmp/homebrew-dev-worktree` にリセットされることがある。コマンドは絶対パスか `cd` で対応
