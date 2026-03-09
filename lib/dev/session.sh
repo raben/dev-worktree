@@ -102,10 +102,10 @@ _transcript() {
   echo "[$key] Waiting for Claude transcript..."
   echo ""
 
-  # Find the latest transcript JSONL file in the container
+  # Find the latest session JSONL file in the container (exclude history.jsonl)
   _find_latest_jsonl() {
     docker exec "$cid" sh -c '
-      files=$(find "$HOME/.claude" -name "*.jsonl" -type f 2>/dev/null)
+      files=$(find "$HOME/.claude" -name "*.jsonl" ! -name "history.jsonl" -type f 2>/dev/null)
       [ -z "$files" ] && exit 0
       echo "$files" | xargs ls -t 2>/dev/null | head -1
     ' 2>/dev/null || true
@@ -165,6 +165,9 @@ _transcript() {
     # New JSONL detected — kill old tail and start new one
     if [ "$latest_jsonl" != "$current_jsonl" ]; then
       _kill_tail
+      # On switch, only show new lines (-n 0); first session shows all (-n +1)
+      local tail_opt="-n 0"
+      [ -z "$current_jsonl" ] && tail_opt="-n +1"
       current_jsonl="$latest_jsonl"
       printed_waiting=false
       echo ""
@@ -174,7 +177,7 @@ _transcript() {
       # Run tail|jq in background so we can keep checking for newer files
       (
         trap 'kill 0' SIGTERM
-        docker exec "$cid" tail -f "$current_jsonl" 2>/dev/null | \
+        docker exec "$cid" tail -f $tail_opt "$current_jsonl" 2>/dev/null | \
           docker exec -i "$cid" jq --unbuffered -r "$jq_filter" 2>/dev/null || true
       ) &
       _tail_pid=$!
