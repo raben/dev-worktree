@@ -65,9 +65,12 @@ _validate_exec_cmd() {
 }
 
 _select_environment() {
+  local status_filter="${1:-}"  # "running" to show only running containers
   local containers
-  containers=$(docker ps -a --filter "label=dev-worktree" \
-    --format '{{.Label "dev-worktree"}}\t{{.State}}' 2>/dev/null || true)
+  local docker_args=(docker ps --filter "label=dev-worktree" --format '{{.Label "dev-worktree"}}\t{{.State}}')
+  [ -z "$status_filter" ] && docker_args=(docker ps -a --filter "label=dev-worktree" --format '{{.Label "dev-worktree"}}\t{{.State}}')
+  [ -n "$status_filter" ] && docker_args+=(--filter "status=$status_filter")
+  containers=$("${docker_args[@]}" 2>/dev/null || true)
 
   if [ -z "$containers" ]; then
     echo "ERROR: No dev-worktree environments found. Run 'dev up <name>' first." >&2
@@ -180,7 +183,7 @@ _get_exec_cmd() {
     cmd=$(grep '^WT_EXEC_CMD=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2-)
   fi
   if [ -z "$cmd" ]; then
-    cmd="claude --dangerously-skip-permissions"
+    cmd="claude"
   fi
   _validate_exec_cmd "$cmd"
   echo "$cmd"
@@ -321,7 +324,7 @@ EOF
     fi
 
     echo ""
-    echo "Ready. Use 'dev open' to connect."
+    echo "Ready. Use 'dev code' or 'dev shell' to connect."
     return
   fi
 
@@ -435,7 +438,7 @@ EOF
     # Check if container is running despite devcontainer up failure (e.g. postCreateCommand failed)
     if _container_is_running "$dev_key"; then
       echo "WARNING: Container is running despite errors (postCreateCommand may have failed)." >&2
-      echo "  You can connect with 'dev open' and fix manually." >&2
+      echo "  You can connect with 'dev shell' and fix manually." >&2
     else
       # Container not running — let cleanup handle it
       return "$_dc_exit"
@@ -474,7 +477,7 @@ EOF
     echo "$allocated_vars" | { grep '_PORT=' || true; } | while IFS='=' read -r k v; do echo "    $k: $v"; done
   fi
   echo ""
-  echo "Ready. Use 'dev open' to connect."
+  echo "Ready. Use 'dev code' or 'dev shell' to connect."
 }
 
 # ─── dev down ───────────────────────────────────────────────────
@@ -721,7 +724,7 @@ EOF
   done <<< "$containers"
 }
 
-# ─── dev open ─────────────────────────────────────────────────
+# ─── dev code / dev shell ─────────────────────────────────────
 
 # Internal: tmux dashboard watcher. Called via `dev _watcher` from tmux.
 # Not intended for direct user invocation.
@@ -791,27 +794,48 @@ _watcher() {
   done
 }
 
-cmd_open() {
+# Resolve environment name interactively if not specified.
+# Outputs the bare name (without project prefix).
+_resolve_name_or_select() {
+  local running_containers
+  running_containers=$(docker ps --filter "label=dev-worktree" --filter "status=running" \
+    --format '{{.Label "dev-worktree"}}' 2>/dev/null | sort -u || true)
+  local running_count
+  running_count=$(echo "$running_containers" | grep -c . 2>/dev/null || echo 0)
+
+  if [ "$running_count" -eq 0 ]; then
+    echo "ERROR: No running environments. Run 'dev up <name>' first." >&2
+    return 1
+  elif [ "$running_count" -eq 1 ]; then
+    local selected_key
+    selected_key=$(echo "$running_containers" | head -1)
+    echo "${selected_key#*/}"
+  else
+    local selected
+    selected=$(_select_environment "running") || return 1
+    echo "${selected#*/}"
+  fi
+}
+
+# ─── dev code ──────────────────────────────────────────────────
+
+cmd_code() {
   local name=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h|--help)
         cat <<EOF
-Usage: dev open [name]
+Usage: dev code [name]
 
-Open AI coding sessions in a tmux dashboard.
+Start an AI coding session in a devcontainer.
 
 Without arguments: single env → direct connect, multiple → select.
 With a name: directly connects to that environment.
 
-The command is determined by WT_EXEC_CMD in .devcontainer/.env
-(default: claude --dangerously-skip-permissions).
-
-Requires 'tmux' for dashboard mode.
-
-Environment variables:
-  DEV_POLL_INTERVAL   Dashboard poll interval in seconds (default: 3)
+You will be prompted whether to enable --dangerously-skip-permissions.
+The base command is determined by WT_EXEC_CMD in .devcontainer/.env
+(default: claude).
 EOF
         return 0 ;;
       -*) echo "Unknown option: $1" >&2; return 1 ;;
@@ -821,49 +845,111 @@ EOF
 
   # ── Resolve name if not specified ──
   if [ -z "$name" ]; then
-    local running_containers
-    running_containers=$(docker ps --filter "label=dev-worktree" --filter "status=running" \
-      --format '{{.Label "dev-worktree"}}' 2>/dev/null | sort -u || true)
-    local running_count
-    running_count=$(echo "$running_containers" | grep -c . 2>/dev/null || echo 0)
+    name=$(_resolve_name_or_select) || return 1
+  fi
 
-    if [ "$running_count" -eq 1 ]; then
-      local selected_key
-      selected_key=$(echo "$running_containers" | head -1)
-      name="${selected_key#*/}"
-    elif [ "$running_count" -gt 1 ]; then
-      local selected
-      selected=$(_select_environment) || return 1
-      name="${selected#*/}"
+  local dev_key
+  dev_key=$(_resolve_key "$name")
+
+  _container_is_running "$dev_key" || \
+    { echo "ERROR: Container not running. Run 'dev up $name' first." >&2; return 1; }
+
+  local worktree_dir
+  worktree_dir=$(_get_wt_path "$dev_key")
+  [ -z "$worktree_dir" ] && { echo "ERROR: Cannot resolve worktree path for '$dev_key'." >&2; return 1; }
+
+  local exec_cmd
+  exec_cmd=$(_get_exec_cmd "$worktree_dir")
+
+  # Ask whether to enable --dangerously-skip-permissions (claude only)
+  if [[ "$exec_cmd" == "claude" || "$exec_cmd" == "claude "* ]] && [[ "$exec_cmd" != *"--dangerously-skip-permissions"* ]]; then
+    printf "Enable --dangerously-skip-permissions? [y/N]: "
+    local answer=""
+    read -r answer </dev/tty
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      exec_cmd="$exec_cmd --dangerously-skip-permissions"
+      _validate_exec_cmd "$exec_cmd"
     fi
   fi
 
-  # ── Single session mode ──
-  if [ -n "$name" ]; then
-    local dev_key
-    dev_key=$(_resolve_key "$name")
+  # exec_cmd is intentionally unquoted for word-splitting (e.g., "claude --dangerously-skip-permissions").
+  # Safety: _validate_exec_cmd allowlist prevents glob/injection chars.
+  # --id-label is required because devcontainer up uses custom labels (replaces default identification).
+  devcontainer exec --workspace-folder "$worktree_dir" \
+    --id-label "dev-worktree=$dev_key" $exec_cmd
+}
 
-    _container_is_running "$dev_key" || \
-      { echo "ERROR: Container not running. Run 'dev up $name' first." >&2; return 1; }
+# ─── dev shell ─────────────────────────────────────────────────
 
-    local worktree_dir
-    worktree_dir=$(_get_wt_path "$dev_key")
-    [ -z "$worktree_dir" ] && { echo "ERROR: Cannot resolve worktree path for '$dev_key'." >&2; return 1; }
+cmd_shell() {
+  local name=""
 
-    local exec_cmd
-    exec_cmd=$(_get_exec_cmd "$worktree_dir")
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        cat <<EOF
+Usage: dev shell [name]
 
-    # exec_cmd is intentionally unquoted for word-splitting (e.g., "claude --dangerously-skip-permissions").
-    # Safety: _validate_exec_cmd allowlist prevents glob/injection chars.
-    # --id-label is required because devcontainer up uses custom labels (replaces default identification).
-    devcontainer exec --workspace-folder "$worktree_dir" \
-      --id-label "dev-worktree=$dev_key" $exec_cmd
-    return
+Open a shell in a running devcontainer.
+
+Without arguments: single env → direct connect, multiple → select.
+With a name: directly connects to that environment.
+EOF
+        return 0 ;;
+      -*) echo "Unknown option: $1" >&2; return 1 ;;
+      *)  name="$1"; shift ;;
+    esac
+  done
+
+  # ── Resolve name if not specified ──
+  if [ -z "$name" ]; then
+    name=$(_resolve_name_or_select) || return 1
   fi
 
-  # ── Dashboard mode (no running environments) ──
+  local dev_key
+  dev_key=$(_resolve_key "$name")
+
+  _container_is_running "$dev_key" || \
+    { echo "ERROR: Container not running. Run 'dev up $name' first." >&2; return 1; }
+
+  local worktree_dir
+  worktree_dir=$(_get_wt_path "$dev_key")
+  [ -z "$worktree_dir" ] && { echo "ERROR: Cannot resolve worktree path for '$dev_key'." >&2; return 1; }
+
+  devcontainer exec --workspace-folder "$worktree_dir" \
+    --id-label "dev-worktree=$dev_key" bash
+}
+
+# ─── dev dash ──────────────────────────────────────────────────
+
+cmd_dash() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        cat <<EOF
+Usage: dev dash
+
+Open a tmux dashboard showing all environments.
+
+Running environments are automatically detected and opened as tmux panes.
+New environments started with 'dev up' are added automatically.
+
+The command in each pane is determined by WT_EXEC_CMD in .devcontainer/.env
+(default: claude).
+
+Requires 'tmux'.
+
+Environment variables:
+  DEV_POLL_INTERVAL   Dashboard poll interval in seconds (default: 3)
+EOF
+        return 0 ;;
+      -*) echo "Unknown option: $1" >&2; return 1 ;;
+      *)  echo "Unknown argument: $1" >&2; return 1 ;;
+    esac
+  done
+
   if ! command -v tmux &>/dev/null; then
-    echo "ERROR: tmux required for dashboard mode. Install: brew install tmux" >&2
+    echo "ERROR: tmux required. Install: brew install tmux" >&2
     return 1
   fi
 
@@ -941,7 +1027,7 @@ After user confirmation, generate:
 - Header comment explaining the format
 - `WT_NAME=<project-name>`
 - `COMPOSE_PROJECT_NAME=<project-name>`
-- `WT_EXEC_CMD=<exec-command>` (the AI CLI command to run in `dev open`; use the value from $DEV_EXEC_CMD if set, otherwise `claude --dangerously-skip-permissions`)
+- `WT_EXEC_CMD=<exec-command>` (the AI CLI command to run in `dev code`; use the value from $DEV_EXEC_CMD if set, otherwise `claude`)
 - One `WT_<SERVICE>_PORT=<default-port>` line per port mapping in docker-compose.yml
 - Variables ending in `_PORT` are auto-allocated by `dev up`; others are passed through
 
@@ -966,7 +1052,7 @@ Defaults to Claude.
 
 Options:
   --ai-cmd CMD     AI CLI command (default: claude)
-  --exec-cmd CMD   Command for 'dev open' sessions (default: claude --dangerously-skip-permissions)
+  --exec-cmd CMD   Command for 'dev code' sessions (default: claude)
 EOF
         return 0 ;;
       *) echo "Unknown option: $1" >&2; return 1 ;;
@@ -981,10 +1067,7 @@ EOF
   fi
 
   if [ -z "$exec_cmd" ]; then
-    case "$ai_cmd" in
-      claude) exec_cmd="claude --dangerously-skip-permissions" ;;
-      *)      exec_cmd="$ai_cmd" ;;
-    esac
+    exec_cmd="$ai_cmd"
   fi
   _validate_exec_cmd "$exec_cmd"
 
@@ -1265,7 +1348,9 @@ Usage: dev <command> [options]
 Commands:
   init               Generate .devcontainer/ for this project
   up [name] [base]   Create (or resume) worktree + devcontainer
-  open [name]        Open AI coding sessions
+  code [name]        Start AI coding session
+  shell [name]       Open a shell in devcontainer
+  dash               Open tmux dashboard for all environments
   down [name]        Stop devcontainer (worktree kept)
   prune [name]       Remove worktree, containers, branch
   list               Show environments
@@ -1296,7 +1381,9 @@ esac
 case "${1:-}" in
   init)     shift; cmd_init "$@" ;;
   up)       shift; cmd_up "$@" ;;
-  open)     shift; cmd_open "$@" ;;
+  code)     shift; cmd_code "$@" ;;
+  shell)    shift; cmd_shell "$@" ;;
+  dash)     shift; cmd_dash "$@" ;;
   down)     shift; cmd_down "$@" ;;
   prune)    shift; cmd_prune "$@" ;;
   list|ls)  shift; cmd_list "$@" ;;

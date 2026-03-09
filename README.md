@@ -29,7 +29,7 @@ cd dev-worktree
 | [jq](https://jqlang.github.io/jq/) | ポート管理 | Homebrew が自動インストール |
 | [devcontainer CLI](https://github.com/devcontainers/cli) | コンテナ管理 | `npm install -g @devcontainers/cli` |
 | [Docker](https://www.docker.com/) | コンテナ実行 | Docker Desktop など |
-| [tmux](https://github.com/tmux/tmux) | ダッシュボード（`dev open`） | `brew install tmux` |
+| [tmux](https://github.com/tmux/tmux) | ダッシュボード（`dev dash`） | `brew install tmux` |
 
 AI CLI（いずれか）:
 
@@ -82,14 +82,17 @@ dev up main          # → dev-main ブランチを main から作成
 dev up develop       # → dev-develop ブランチを develop から作成
 ```
 
-### 3. AI セッションを開く
+### 3. 環境に接続する
 
 ```bash
-# tmux ダッシュボード（全環境を分割表示、新環境を自動検知）
-dev open
+# AI コーディングセッション（--dangerously-skip-permissions を対話確認）
+dev code feature-auth
 
-# 単一環境に直接接続
-dev open feature-auth
+# シェルで直接接続
+dev shell feature-auth
+
+# tmux ダッシュボード（全環境を一括管理、新環境を自動検知）
+dev dash
 ```
 
 ### 4. 環境を停止・削除する
@@ -108,7 +111,9 @@ dev prune feature-auth
 |---------|------|
 | `dev init` | `.devcontainer/` を対話的に生成 |
 | `dev up [name] [base]` | worktree 作成 → コンテナ起動（base デフォルト: `main`） |
-| `dev open [name]` | AI セッションを開く（tmux ダッシュボード） |
+| `dev code [name]` | AI コーディングセッションを開始 |
+| `dev shell [name]` | シェルでコンテナに接続 |
+| `dev dash` | tmux ダッシュボードで全環境を一括管理 |
 | `dev down [name]` | コンテナ停止（worktree は保持） |
 | `dev prune [name]` | コンテナ・worktree・ブランチを完全削除 |
 | `dev list` | 稼働中の worktree 一覧 |
@@ -147,14 +152,14 @@ dev up        dev down      dev prune
 # .devcontainer/.env.example
 WT_NAME=myapp
 COMPOSE_PROJECT_NAME=myapp
-WT_EXEC_CMD=claude --dangerously-skip-permissions
+WT_EXEC_CMD=claude
 WT_API_PORT=3000
 WT_WEB_PORT=3001
 WT_DB_PORT=5432
 ```
 
 - `_PORT` で終わる変数は `dev up` 時に `lsof` で空きポートを検出して自動割り当て
-- `WT_EXEC_CMD` は `dev open` で実行されるコマンド
+- `WT_EXEC_CMD` は `dev code` / `dev dash` で実行されるコマンド
 - それ以外の変数はそのまま渡される
 - 割り当て結果は worktree の `.devcontainer/.env` に保存される
 
