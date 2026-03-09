@@ -148,6 +148,29 @@ v0.9.4 で発生したバグの再発防止。`--id-label` が正しく渡され
    - exit code が 0
    - 出力に "ok" が含まれる（`WT_EXEC_CMD=echo ok` がプロンプトなしで実行された証拠）
 
+## テスト 7c: dev issue --dry-run（単一）
+
+`dev issue` のドライランモードが正しく動作することを検証。GitHub API やコンテナ操作は行わない。
+
+1. 実行: `cd /tmp/dev-worktree-test && dev issue --dry-run 42`
+2. 検証:
+   - exit code が 0
+   - 出力に "[DRY RUN]" が含まれる
+   - 出力に "Issue #42" が含まれる
+   - 出力に "Would run: dev up issue-42" が含まれる
+   - 出力に "Would start tmux session: dev-issue-42" が含まれる
+
+## テスト 7d: dev issue --dry-run（複数・カンマ区切り）
+
+1. 実行: `cd /tmp/dev-worktree-test && dev issue --dry-run 10,20,30`
+2. 検証:
+   - exit code が 0
+   - 出力に "Issue #10" が含まれる
+   - 出力に "Issue #20" が含まれる
+   - 出力に "Issue #30" が含まれる
+   - 出力に "dev-issue-10" が含まれる
+   - 出力に "dev-issue-30" が含まれる
+
 ## テスト 8: dev down
 
 1. 実行: `cd /tmp/dev-worktree-test && dev down test-new-branch`
@@ -213,6 +236,8 @@ Test  5 (dev up - protected idempotent): PASS/FAIL
 Test  6 (dev list):                      PASS/FAIL
 Test  7 (dev shell - named):            PASS/FAIL
 Test 7b (dev code - named):             PASS/FAIL
+Test 7c (dev issue --dry-run single):   PASS/FAIL
+Test 7d (dev issue --dry-run multi):    PASS/FAIL
 Test  8 (dev down):                      PASS/FAIL
 Test  9 (dev up - restart after down):   PASS/FAIL
 Test 10 (dev prune):                     PASS/FAIL
