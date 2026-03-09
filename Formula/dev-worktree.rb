@@ -10,6 +10,7 @@ class DevWorktree < Formula
 
   def install
     bin.install Dir["bin/*"]
+    (lib/"dev").install Dir["lib/dev/*"]
   end
 
   test do
