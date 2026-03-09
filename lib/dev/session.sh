@@ -26,13 +26,13 @@ _render_status() {
   printf "  %-20s %-8s\n" "NAME" "STATUS"
   printf "  %-20s %-8s\n" "----" "------"
 
-  local -A _seen=()
+  local _seen=""
   local key="" wt_path="" state=""
   local status=""
   while IFS=$'\t' read -r key wt_path state; do
     [ -z "$key" ] && continue
-    [[ -v _seen["$key"] ]] && continue
-    _seen["$key"]=1
+    case "$_seen" in *"|$key|"*) continue ;; esac
+    _seen="${_seen}|${key}|"
 
     status="stopped"
     echo "$containers" | grep -F "${key}"$'\t' | grep -q "running" && status="running"

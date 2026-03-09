@@ -68,12 +68,12 @@ _select_environment() {
   fi
 
   # Deduplicate keys
-  local -A _seen=()
+  local _seen=""
   local keys=()
   while IFS=$'\t' read -r key state; do
     [ -z "$key" ] && continue
-    [[ -v _seen["$key"] ]] && continue
-    _seen["$key"]=1
+    case "$_seen" in *"|$key|"*) continue ;; esac
+    _seen="${_seen}|${key}|"
     keys+=("$key ($state)")
   done <<< "$containers"
 

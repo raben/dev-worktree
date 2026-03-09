@@ -495,13 +495,13 @@ EOF
   printf "%-35s %-10s %s\n" "ID" "STATUS" "PORTS"
   printf "%-35s %-10s %s\n" "--" "------" "-----"
 
-  local -A _seen=()
+  local _seen=""
   local key="" wt_path="" state="" cname=""
   local status="" ports=""
   while IFS=$'\t' read -r key wt_path state cname; do
     [ -z "$key" ] && continue
-    [[ -v _seen["$key"] ]] && continue
-    _seen["$key"]=1
+    case "$_seen" in *"|$key|"*) continue ;; esac
+    _seen="${_seen}|${key}|"
 
     status="stopped"
     echo "$containers" | grep -F "${key}"$'\t' | grep -q "running" && status="running"
