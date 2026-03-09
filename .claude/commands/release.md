@@ -24,9 +24,10 @@ dev-worktree のリリースフロー。VERSION bump → tag → push → Homebr
 2. `git add bin/dev` のみステージ（無関係な変更を巻き込まない）
 3. コミット（メッセージ例: `chore: bump VERSION to X.Y.Z`）
 
-### Step 4: タグ & プッシュ
+### Step 4: タグ & プッシュ & GitHub Release
 1. `git tag vX.Y.Z`
 2. `git push origin main --tags`
+3. `gh release create vX.Y.Z --title "vX.Y.Z" --generate-notes` で GitHub Release を作成
 
 ### Step 5: SHA256 取得
 1. `curl -sL https://github.com/raben/dev-worktree/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256`
@@ -45,7 +46,8 @@ dev-worktree のリリースフロー。VERSION bump → tag → push → Homebr
 
 ### Step 9: 確認
 1. リリース完了を報告
-2. `brew upgrade dev-worktree` は `/brew-upgrade` で実行できることを案内
+2. 開発機: `/brew-upgrade` で更新可能
+3. 他端末: `brew update && brew upgrade dev-worktree` で更新可能（GitHub Release があるため `brew update` で検出される）
 
 ## 注意
 - CWD が `/tmp/homebrew-dev-worktree` にリセットされることがある。コマンドは絶対パスか `cd` で対応
