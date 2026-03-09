@@ -51,7 +51,10 @@ _validate_exec_cmd() {
   fi
 }
 
+# Select environment interactively. Sets DEV_SELECTED_KEY (no subshell).
+# fzf must run outside $() to access /dev/tty reliably.
 _select_environment() {
+  DEV_SELECTED_KEY=""
   local status_filter="${1:-}"  # "running" to show only running containers
   local containers
   local docker_args=(docker ps --filter "label=dev-worktree" --format '{{.Label "dev-worktree"}}\t{{.State}}')
@@ -65,39 +68,29 @@ _select_environment() {
   fi
 
   # Deduplicate keys
-  local _seen=""
+  local -A _seen=()
   local keys=()
   while IFS=$'\t' read -r key state; do
     [ -z "$key" ] && continue
-    echo "$_seen" | grep -qxF "$key" && continue
-    _seen="${_seen}${key}"$'\n'
+    [[ -v _seen["$key"] ]] && continue
+    _seen["$key"]=1
     keys+=("$key ($state)")
   done <<< "$containers"
 
   if [ "${#keys[@]}" -eq 1 ]; then
-    local result="${keys[0]%% (*}"
-    _validate_name "$result" || return 1
-    echo "$result"
+    DEV_SELECTED_KEY="${keys[0]% (*}"
+    _validate_name "$DEV_SELECTED_KEY" || return 1
     return 0
   fi
 
-  echo "Select environment:" >&2
-  local i=1
-  for entry in "${keys[@]}"; do
-    echo "  $i) $entry" >&2
-    i=$((i + 1))
-  done
-  printf "  #: " >&2
-  local choice
-  read -r choice
-  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#keys[@]}" ]; then
-    echo "ERROR: Invalid selection." >&2
+  local selected=""
+  selected=$(printf '%s\n' "${keys[@]}" | fzf --prompt="Select environment: " --reverse) || {
+    echo "ERROR: Selection cancelled." >&2
     return 1
-  fi
-  local selected="${keys[$((choice - 1))]}"
-  local result="${selected%% (*}"
-  _validate_name "$result" || return 1
-  echo "$result"
+  }
+  [ -z "$selected" ] && { echo "ERROR: No selection." >&2; return 1; }
+  DEV_SELECTED_KEY="${selected% (*}"
+  _validate_name "$DEV_SELECTED_KEY" || return 1
 }
 
 # ─── Port Allocation ─────────────────────────────────────────
@@ -172,7 +165,7 @@ _get_exec_cmd() {
   if [ -z "$cmd" ]; then
     cmd="claude"
   fi
-  _validate_exec_cmd "$cmd"
+  _validate_exec_cmd "$cmd" || return 1
   echo "$cmd"
 }
 

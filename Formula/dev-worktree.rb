@@ -6,6 +6,7 @@ class DevWorktree < Formula
   license "MIT"
   head "https://github.com/raben/dev-worktree.git", branch: "main"
 
+  depends_on "fzf"
   depends_on "jq"
 
   def install

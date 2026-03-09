@@ -90,6 +90,7 @@ EOF
     else
       local _dc_log
       _dc_log=$(mktemp /tmp/dev-worktree-dc-XXXXXX)
+      trap '_spinner_stop' EXIT
       _spinner_start "Starting devcontainer"
       if devcontainer up --workspace-folder "$worktree_dir" \
         --id-label "dev-worktree=$dev_key" \
@@ -97,10 +98,13 @@ EOF
         --id-label "dev-worktree.version=$VERSION" \
         > "$_dc_log" 2>&1; then
         _spinner_stop
+        trap - EXIT
         rm -f "$_dc_log"
       else
         _spinner_stop
+        trap - EXIT
         echo "ERROR: devcontainer up failed. See log: $_dc_log" >&2
+        return 1
       fi
     fi
 
@@ -121,6 +125,7 @@ EOF
 
   cleanup() {
     local ec=$?
+    _spinner_stop
     rmdir "$lockdir" 2>/dev/null || true
     if [ $ec -ne 0 ] && [ "$_cleanup_enabled" = true ]; then
       echo "ERROR: Failed. Cleaning up..."
@@ -282,7 +287,8 @@ EOF
   done
 
   if [ -z "$dev_key" ]; then
-    dev_key=$(_select_environment) || return 1
+    _select_environment || return 1
+    dev_key="$DEV_SELECTED_KEY"
   fi
   dev_key=$(_resolve_key "$dev_key")
 
@@ -321,7 +327,8 @@ EOF
   done
 
   if [ -z "$dev_key" ]; then
-    dev_key=$(_select_environment) || return 1
+    _select_environment || return 1
+    dev_key="$DEV_SELECTED_KEY"
   fi
   dev_key=$(_resolve_key "$dev_key")
 
@@ -488,17 +495,18 @@ EOF
   printf "%-35s %-10s %s\n" "ID" "STATUS" "PORTS"
   printf "%-35s %-10s %s\n" "--" "------" "-----"
 
-  local _seen=""
+  local -A _seen=()
   local key="" wt_path="" state="" cname=""
+  local status="" ports=""
   while IFS=$'\t' read -r key wt_path state cname; do
     [ -z "$key" ] && continue
-    echo "$_seen" | grep -qxF "$key" && continue
-    _seen="${_seen}${key}"$'\n'
+    [[ -v _seen["$key"] ]] && continue
+    _seen["$key"]=1
 
-    local status="stopped"
-    echo "$containers" | grep "^${key}"$'\t' | grep -q "running" && status="running"
+    status="stopped"
+    echo "$containers" | grep -F "${key}"$'\t' | grep -q "running" && status="running"
 
-    local ports=""
+    ports=""
     [ -n "$wt_path" ] && ports=$(_get_ports_from_env "$wt_path")
 
     printf "%-35s %-10s %s\n" "$key" "$status" "$ports"
