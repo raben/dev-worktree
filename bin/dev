@@ -4,7 +4,7 @@ set -euo pipefail
 # dev - Isolated parallel development environments
 # Usage: dev <command> [options]
 
-VERSION="0.12.1"
+VERSION="0.13.0"
 
 # ─── Debug mode ─────────────────────────────────────────────
 # Set DEV_DEBUG=1 to enable trace output for troubleshooting.
@@ -88,7 +88,8 @@ case "${1:-}" in
   prune)    shift; cmd_prune "$@" ;;
   list|ls)  shift; cmd_list "$@" ;;
   doctor)   shift; cmd_doctor "$@" ;;
-  _watcher) shift; _watcher "$@" ;;
+  _watcher)    shift; _watcher "$@" ;;
+  _transcript) shift; _transcript "$@" ;;
   -v|--version) echo "dev $VERSION" ;;
   -h|--help|"") usage ;;
   *)      echo "Unknown command: $1" >&2; usage; exit 1 ;;
