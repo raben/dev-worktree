@@ -50,10 +50,13 @@ _render_status() {
   local existing_titles
   existing_titles=$(tmux list-panes -t "$session" -F '#{pane_title}' 2>/dev/null || true)
 
-  local cid="" dev_cmd=""
+  local _seen_pane="" cid="" dev_cmd="" new_pane_id=""
   while IFS=$'\t' read -r key wt_path state; do
     [ -z "$key" ] && continue
     [ "$state" != "running" ] && continue
+    # Dedup: skip if already processed in this loop iteration
+    case "$_seen_pane" in *"|$key|"*) continue ;; esac
+    _seen_pane="${_seen_pane}|${key}|"
     echo "$existing_titles" | grep -qFx "$key" && continue
 
     cid=$(docker ps -q --filter "label=dev-worktree=$key" --filter "status=running" 2>/dev/null | head -1)
@@ -61,12 +64,12 @@ _render_status() {
 
     dev_cmd=$(realpath "$0" 2>/dev/null || echo "$0")
 
-    tmux split-window -h -t "$session" \
+    new_pane_id=$(tmux split-window -h -t "$session" -P -F '#{pane_id}' \
       -e "DEV_KEY=$key" \
       -e "DEV_CID=$cid" \
       -e "DEV_CMD=$dev_cmd" \
-      '"${DEV_CMD}" _transcript "${DEV_KEY}" "${DEV_CID}"'
-    tmux select-pane -T "$key"
+      '"${DEV_CMD}" _transcript "${DEV_KEY}" "${DEV_CID}"')
+    tmux select-pane -t "$new_pane_id" -T "$key"
     # Layout: status sidebar on left (~30%), transcript panes stacked on right
     tmux select-layout -t "$session" main-vertical
     tmux resize-pane -t "${session}:.0" -x 60
@@ -96,7 +99,14 @@ _transcript() {
   local key="$1" cid="$2"
   local _tail_pid=""
 
-  _kill_tail() { [ -n "$_tail_pid" ] && kill "$_tail_pid" 2>/dev/null; _tail_pid=""; }
+  _kill_tail() {
+    if [ -n "$_tail_pid" ]; then
+      # Kill children (docker exec processes) first, then the subshell
+      pkill -P "$_tail_pid" 2>/dev/null || true
+      kill "$_tail_pid" 2>/dev/null || true
+      _tail_pid=""
+    fi
+  }
   trap '_kill_tail; exit 0' SIGTERM SIGINT EXIT
 
   echo "[$key] Waiting for Claude transcript..."
@@ -176,7 +186,6 @@ _transcript() {
 
       # Run tail|jq in background so we can keep checking for newer files
       (
-        trap 'kill 0' SIGTERM
         docker exec "$cid" tail -f $tail_opt "$current_jsonl" 2>/dev/null | \
           docker exec -i "$cid" jq --unbuffered -r "$jq_filter" 2>/dev/null || true
       ) &
