@@ -99,23 +99,38 @@ _transcript() {
   local key="$1" cid="$2"
   local _tail_pid=""
 
+  # Kill transcript processes inside the container via PID file
+  _kill_container_transcript() {
+    docker exec "$cid" sh -c '
+      pid=$(cat /tmp/dev-transcript.pid 2>/dev/null) || exit 0
+      pkill -P "$pid" 2>/dev/null
+      kill "$pid" 2>/dev/null
+      rm -f /tmp/dev-transcript.pid
+    ' 2>/dev/null || true
+  }
+
   _kill_tail() {
     if [ -n "$_tail_pid" ]; then
-      # Kill children (docker exec processes) first, then the subshell
-      pkill -P "$_tail_pid" 2>/dev/null || true
       kill "$_tail_pid" 2>/dev/null || true
+      wait "$_tail_pid" 2>/dev/null || true
       _tail_pid=""
     fi
+    _kill_container_transcript
   }
-  trap '_kill_tail; exit 0' SIGTERM SIGINT EXIT
+  trap '_kill_tail; exit 0' SIGTERM SIGINT SIGHUP EXIT
+
+  # Clean up leftover transcript processes from a previous dashboard session
+  _kill_container_transcript
 
   echo "[$key] Waiting for Claude transcript..."
   echo ""
 
   # Find the latest session JSONL file in the container (exclude history.jsonl)
+  # Find the latest main session JSONL (exclude history.jsonl and subagent files)
   _find_latest_jsonl() {
     docker exec "$cid" sh -c '
-      files=$(find "$HOME/.claude" -name "*.jsonl" ! -name "history.jsonl" -type f 2>/dev/null)
+      files=$(find "$HOME/.claude" -path "*/subagents/*" -prune -o \
+        -name "*.jsonl" ! -name "history.jsonl" -type f -print 2>/dev/null)
       [ -z "$files" ] && exit 0
       echo "$files" | xargs ls -t 2>/dev/null | head -1
     ' 2>/dev/null || true
@@ -184,11 +199,17 @@ _transcript() {
       echo "[$key] Streaming: $(basename "$current_jsonl")"
       echo ""
 
-      # Run tail|jq in background so we can keep checking for newer files
-      (
-        docker exec "$cid" tail -f $tail_opt "$current_jsonl" 2>/dev/null | \
-          docker exec -i "$cid" jq --unbuffered -r "$jq_filter" 2>/dev/null || true
-      ) &
+      # Run tail|jq inside a single docker exec. Write PID file so
+      # _kill_tail can explicitly clean up container-side processes.
+      docker exec \
+        -e "DEV_TAIL_OPT=$tail_opt" \
+        -e "DEV_JSONL=$current_jsonl" \
+        -e "DEV_JQ_FILTER=$jq_filter" \
+        "$cid" sh -c '
+          echo $$ > /tmp/dev-transcript.pid
+          trap "rm -f /tmp/dev-transcript.pid" EXIT
+          tail -f $DEV_TAIL_OPT "$DEV_JSONL" 2>/dev/null | jq --unbuffered -r "$DEV_JQ_FILTER" 2>/dev/null
+        ' 2>/dev/null &
       _tail_pid=$!
     fi
 

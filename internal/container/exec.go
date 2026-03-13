@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/pkg/stdcopy"
 	"golang.org/x/term"
 )
 
@@ -32,7 +33,7 @@ func (c *Client) Exec(ctx context.Context, containerID string, cmd []string) (st
 	defer resp.Close()
 
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, resp.Reader); err != nil {
+	if _, err := stdcopy.StdCopy(&buf, &buf, resp.Reader); err != nil {
 		return "", fmt.Errorf("read exec output: %w", err)
 	}
 
@@ -82,7 +83,10 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, cmd []
 	// Handle terminal resize signals.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGWINCH)
-	defer signal.Stop(sigCh)
+	defer func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+	}()
 
 	go func() {
 		for range sigCh {

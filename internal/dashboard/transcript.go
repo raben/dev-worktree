@@ -2,35 +2,14 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/autor-dev/dev-worktree/internal/container"
+	"github.com/autor-dev/dev-worktree/internal/transcript"
 )
-
-// JSONL types for parsing Claude session logs.
-
-type jsonlEntry struct {
-	Type    string          `json:"type"`
-	Subtype string          `json:"subtype,omitempty"`
-	Message json.RawMessage `json:"message,omitempty"`
-	// For system turn_duration messages.
-	DurationMs float64 `json:"durationMs,omitempty"`
-}
-
-type messageContent struct {
-	Content json.RawMessage `json:"content"`
-}
-
-type contentBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
-}
 
 // Transcript styles.
 var (
@@ -146,109 +125,12 @@ func streamTranscript(dc *container.Client, containerID string) tea.Cmd {
 }
 
 // parseTranscript parses JSONL content into TranscriptLine entries.
+// Delegates to internal/transcript.ParseAll() to avoid duplicating parsing logic.
 func parseTranscript(raw string) []TranscriptLine {
-	var result []TranscriptLine
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		var entry jsonlEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-
-		switch entry.Type {
-		case "user":
-			result = append(result, parseUserEntry(entry)...)
-		case "assistant":
-			result = append(result, parseAssistantEntry(entry)...)
-		case "system":
-			if entry.Subtype == "turn_duration" {
-				// Parse durationMs from the top-level or from message.
-				dur := entry.DurationMs
-				if dur == 0 && entry.Message != nil {
-					var sysMsg struct {
-						DurationMs float64 `json:"durationMs"`
-					}
-					if json.Unmarshal(entry.Message, &sysMsg) == nil {
-						dur = sysMsg.DurationMs
-					}
-				}
-				if dur > 0 {
-					secs := dur / 1000.0
-					result = append(result, TranscriptLine{
-						Type: "done",
-						Text: fmt.Sprintf("%.1fs", secs),
-					})
-				}
-			}
-		}
+	parsed := transcript.ParseAll(raw)
+	result := make([]TranscriptLine, len(parsed))
+	for i, l := range parsed {
+		result[i] = TranscriptLine{Type: l.Type, Text: l.Text}
 	}
 	return result
-}
-
-// parseUserEntry extracts transcript lines from a user message.
-func parseUserEntry(entry jsonlEntry) []TranscriptLine {
-	if entry.Message == nil {
-		return nil
-	}
-	var msg messageContent
-	if err := json.Unmarshal(entry.Message, &msg); err != nil {
-		return nil
-	}
-
-	// content can be a string directly.
-	var contentStr string
-	if err := json.Unmarshal(msg.Content, &contentStr); err == nil {
-		return []TranscriptLine{{Type: "user", Text: contentStr}}
-	}
-
-	return nil
-}
-
-// parseAssistantEntry extracts transcript lines from an assistant message.
-func parseAssistantEntry(entry jsonlEntry) []TranscriptLine {
-	if entry.Message == nil {
-		return nil
-	}
-	var msg messageContent
-	if err := json.Unmarshal(entry.Message, &msg); err != nil {
-		return nil
-	}
-
-	// content is an array of blocks.
-	var blocks []contentBlock
-	if err := json.Unmarshal(msg.Content, &blocks); err != nil {
-		return nil
-	}
-
-	var result []TranscriptLine
-	for _, block := range blocks {
-		switch block.Type {
-		case "text":
-			if block.Text != "" {
-				result = append(result, TranscriptLine{Type: "asst", Text: block.Text})
-			}
-		case "tool_use":
-			inputStr := summarizeInput(block.Input, 60)
-			result = append(result, TranscriptLine{
-				Type: "tool",
-				Text: fmt.Sprintf("%s(%s)", block.Name, inputStr),
-			})
-		}
-	}
-	return result
-}
-
-// summarizeInput returns a compact string representation of a tool's input JSON,
-// truncated to maxLen characters.
-func summarizeInput(raw json.RawMessage, maxLen int) string {
-	if raw == nil {
-		return ""
-	}
-	s := string(raw)
-	s = strings.ReplaceAll(s, "\n", " ")
-	return truncate(s, maxLen)
 }

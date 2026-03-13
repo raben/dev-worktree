@@ -148,7 +148,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		Ports:              make(map[string]int),
 	}
 	for hostPort, containerPort := range portBindings {
-		envCfg.Ports[fmt.Sprintf("PORT_%d", containerPort)] = hostPort
+		envCfg.Ports[fmt.Sprintf("%d", containerPort)] = hostPort
 	}
 	envPath := filepath.Join(wtPath, ".dev.env")
 	if err := config.WriteEnv(envPath, envCfg); err != nil {

@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -174,6 +175,9 @@ func (c *Client) List(ctx context.Context) ([]Environment, error) {
 	for _, env := range seen {
 		envs = append(envs, env)
 	}
+	sort.Slice(envs, func(i, j int) bool {
+		return envs[i].Key < envs[j].Key
+	})
 	return envs, nil
 }
 
