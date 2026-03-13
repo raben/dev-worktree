@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -33,8 +32,8 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 }
 
-func runDoctor(_ *cobra.Command, _ []string) error {
-	ctx := context.Background()
+func runDoctor(cmd *cobra.Command, _ []string) error {
+	ctx := cmd.Context()
 	passed := 0
 	failed := 0
 

@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var codeSafe bool
+
 var codeCmd = &cobra.Command{
 	Use:   "code [name]",
 	Short: "Start a Claude coding session in a container",
@@ -17,11 +19,12 @@ var codeCmd = &cobra.Command{
 }
 
 func init() {
+	codeCmd.Flags().BoolVar(&codeSafe, "safe", false, "Run Claude without --dangerously-skip-permissions")
 	rootCmd.AddCommand(codeCmd)
 }
 
 func runCode(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	dc, err := container.NewClient()
 	if err != nil {
@@ -34,7 +37,10 @@ func runCode(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	execCmd := []string{"claude", "--dangerously-skip-permissions"}
+	execCmd := []string{"claude"}
+	if !codeSafe {
+		execCmd = append(execCmd, "--dangerously-skip-permissions")
+	}
 
 	fmt.Printf("Starting Claude session in '%s'...\n", devKey)
 	return dc.ExecInteractive(ctx, containerID, execCmd)

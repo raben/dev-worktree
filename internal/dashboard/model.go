@@ -3,10 +3,10 @@ package dashboard
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/autor-dev/dev-worktree/internal/browser"
 	"github.com/autor-dev/dev-worktree/internal/container"
 )
 
@@ -185,7 +185,7 @@ func (m Model) openInBrowser() {
 		return
 	}
 	url := fmt.Sprintf("http://localhost:%d", env.Ports[0].HostPort)
-	_ = exec.Command("open", url).Start()
+	_ = browser.Open(url)
 }
 
 // refreshEnvs calls dc.List() and returns the result as a message.

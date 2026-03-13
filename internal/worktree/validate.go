@@ -13,6 +13,9 @@ var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*$`)
 // shellMetachars contains characters that are dangerous in shell contexts.
 var shellMetachars = regexp.MustCompile(`[;&|$` + "`" + `(){}!<>~*?\[\]#"'\\` + `]`)
 
+// multiHyphen matches two or more consecutive hyphens.
+var multiHyphen = regexp.MustCompile(`-{2,}`)
+
 // ValidateName validates a worktree name.
 // Rules:
 //   - Must not be empty
@@ -51,8 +54,7 @@ func SanitizeName(name string) string {
 	sanitized := r.Replace(name)
 
 	// Collapse multiple hyphens into one.
-	multi := regexp.MustCompile(`-{2,}`)
-	sanitized = multi.ReplaceAllString(sanitized, "-")
+	sanitized = multiHyphen.ReplaceAllString(sanitized, "-")
 
 	// Trim leading/trailing hyphens.
 	sanitized = strings.Trim(sanitized, "-")

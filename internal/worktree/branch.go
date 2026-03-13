@@ -20,7 +20,7 @@ func IsProtected(name string) bool {
 }
 
 // DeleteBranch deletes the branch for a given name.
-// Uses safe delete (equivalent to git branch -d). Returns error if not fully merged.
+// Uses force delete (equivalent to git branch -D) by removing the reference directly.
 func (m *Manager) DeleteBranch(name string) error {
 	branchRef := plumbing.NewBranchReferenceName(m.BranchName(name))
 

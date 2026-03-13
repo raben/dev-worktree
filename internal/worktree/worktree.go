@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // Manager handles git worktree operations.
@@ -178,20 +177,3 @@ func (m *Manager) HasUncommittedChanges(name string) (bool, error) {
 	return !status.IsClean(), nil
 }
 
-// resolveReference resolves a branch name to a plumbing.Hash.
-// Tries refs/heads/<branch> first, then the literal name.
-func (m *Manager) resolveReference(branch string) (*plumbing.Hash, error) {
-	ref, err := m.repo.Reference(plumbing.NewBranchReferenceName(branch), true)
-	if err == nil {
-		h := ref.Hash()
-		return &h, nil
-	}
-
-	ref, err = m.repo.Reference(plumbing.ReferenceName(branch), true)
-	if err != nil {
-		return nil, fmt.Errorf("worktree: resolve reference %q: %w", branch, err)
-	}
-
-	h := ref.Hash()
-	return &h, nil
-}

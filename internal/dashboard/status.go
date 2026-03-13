@@ -116,16 +116,17 @@ func stateStyled(state string) string {
 	}
 }
 
-// truncate shortens a string to maxLen, appending "…" if truncated.
+// truncate shortens a string to maxLen runes, appending "…" if truncated.
 func truncate(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
 	}
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
 	if maxLen <= 1 {
 		return "…"
 	}
-	return s[:maxLen-1] + "…"
+	return string(runes[:maxLen-1]) + "…"
 }

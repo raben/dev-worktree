@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/autor-dev/dev-worktree/internal/container"
@@ -17,7 +16,7 @@ var downCmd = &cobra.Command{
 }
 
 func runDown(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	dc, err := container.NewClient()
 	if err != nil {

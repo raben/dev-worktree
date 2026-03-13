@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,14 +28,21 @@ const (
 )
 
 // WriteEnv writes cfg to path as a KEY=value .env file with mode 0600.
-func WriteEnv(path string, cfg *EnvConfig) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+// Uses atomic write (temp file + rename) to prevent partial writes.
+func WriteEnv(path string, cfg *EnvConfig) (err error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".env.tmp.*")
 	if err != nil {
-		return fmt.Errorf("creating env file: %w", err)
+		return fmt.Errorf("creating temp file: %w", err)
 	}
-	defer f.Close()
+	tmpPath := tmp.Name()
+	defer func() {
+		if err != nil {
+			os.Remove(tmpPath)
+		}
+	}()
 
-	w := bufio.NewWriter(f)
+	w := bufio.NewWriter(tmp)
 
 	writeLine := func(key, value string) {
 		fmt.Fprintf(w, "%s=%s\n", key, value)
@@ -71,7 +79,18 @@ func WriteEnv(path string, cfg *EnvConfig) error {
 		}
 	}
 
-	return w.Flush()
+	if err = w.Flush(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err = tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // ReadEnv reads an .env file from path and returns the parsed EnvConfig.

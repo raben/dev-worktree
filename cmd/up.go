@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 
@@ -20,7 +19,7 @@ var upCmd = &cobra.Command{
 }
 
 func runUp(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	// Resolve project directory
 	projectDir, err := findProjectDir()
@@ -104,17 +103,23 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Allocate ports
+	// Allocate ports (held open until Docker binds them)
 	portBindings := make(map[int]int)
+	var portAllocs []*port.Allocation
 	if len(cfg.Ports) > 0 {
-		allocated, err := port.AllocateMultiple(cfg.Ports)
+		allocs, err := port.AllocateMultipleAndHold(cfg.Ports)
 		if err != nil {
 			return fmt.Errorf("allocating ports: %w", err)
 		}
-		for _, containerPort := range cfg.Ports {
-			hostPort := allocated[containerPort]
-			portBindings[hostPort] = containerPort
+		portAllocs = allocs
+		for i, containerPort := range cfg.Ports {
+			portBindings[allocs[i].Port] = containerPort
 		}
+	}
+
+	// Release held ports right before Docker binds them
+	for _, a := range portAllocs {
+		a.Release()
 	}
 
 	// Start container

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -25,7 +24,7 @@ func init() {
 }
 
 func runPrune(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	dc, err := container.NewClient()
 	if err != nil {

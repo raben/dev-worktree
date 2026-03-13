@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os/exec"
-	"runtime"
 
+	"github.com/autor-dev/dev-worktree/internal/browser"
 	"github.com/autor-dev/dev-worktree/internal/container"
 	"github.com/autor-dev/dev-worktree/internal/selector"
 	"github.com/spf13/cobra"
@@ -23,7 +21,7 @@ func init() {
 }
 
 func runOpen(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	dc, err := container.NewClient()
 	if err != nil {
@@ -69,16 +67,5 @@ func runOpen(cmd *cobra.Command, args []string) error {
 	url := fmt.Sprintf("http://localhost:%d", env.Ports[0].HostPort)
 	fmt.Printf("Opening %s ...\n", url)
 
-	return openBrowser(url)
-}
-
-func openBrowser(url string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url).Start()
-	case "linux":
-		return exec.Command("xdg-open", url).Start()
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
-	}
+	return browser.Open(url)
 }
