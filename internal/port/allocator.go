@@ -103,10 +103,15 @@ func AllocateAndHold(base int) (*Allocation, error) {
 
 // AllocateMultipleAndHold allocates multiple ports, keeping them all held open.
 // The caller must call Release() on each Allocation before Docker binds the ports.
+// excludePorts is a set of ports already in use (e.g., by other dev-worktree containers)
+// that should be skipped even if net.Listen succeeds (Docker proxy ports).
 // On error, all already-held ports are released before returning.
-func AllocateMultipleAndHold(bases []int) ([]*Allocation, error) {
+func AllocateMultipleAndHold(bases []int, excludePorts map[int]bool) ([]*Allocation, error) {
 	var allocs []*Allocation
 	used := make(map[int]bool)
+	for p := range excludePorts {
+		used[p] = true
+	}
 
 	for _, base := range bases {
 		if base < minPort || base > maxPort {

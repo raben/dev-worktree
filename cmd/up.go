@@ -103,11 +103,23 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Collect ports already used by other dev-worktree containers
+	existingEnvs, err := dc.List(ctx)
+	if err != nil {
+		return fmt.Errorf("listing environments: %w", err)
+	}
+	excludePorts := make(map[int]bool)
+	for _, e := range existingEnvs {
+		for _, p := range e.Ports {
+			excludePorts[p.HostPort] = true
+		}
+	}
+
 	// Allocate ports (held open until Docker binds them)
 	portBindings := make(map[int]int)
 	var portAllocs []*port.Allocation
 	if len(cfg.Ports) > 0 {
-		allocs, err := port.AllocateMultipleAndHold(cfg.Ports)
+		allocs, err := port.AllocateMultipleAndHold(cfg.Ports, excludePorts)
 		if err != nil {
 			return fmt.Errorf("allocating ports: %w", err)
 		}

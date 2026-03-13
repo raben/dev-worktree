@@ -164,7 +164,7 @@ func TestAllocateAndHold_BelowMinPort(t *testing.T) {
 
 func TestAllocateMultipleAndHold_NoDuplicates(t *testing.T) {
 	bases := []int{49152, 49152, 49152}
-	allocs, err := AllocateMultipleAndHold(bases)
+	allocs, err := AllocateMultipleAndHold(bases, nil)
 	if err != nil {
 		t.Fatalf("AllocateMultipleAndHold returned error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestAllocateMultipleAndHold_NoDuplicates(t *testing.T) {
 
 func TestAllocateMultipleAndHold_InvalidBase(t *testing.T) {
 	bases := []int{49152, 80}
-	_, err := AllocateMultipleAndHold(bases)
+	_, err := AllocateMultipleAndHold(bases, nil)
 	if err == nil {
 		t.Error("AllocateMultipleAndHold should return error when a base is below minPort")
 	}
@@ -199,7 +199,7 @@ func TestAllocateMultipleAndHold_InvalidBase(t *testing.T) {
 func TestAllocateMultipleAndHold_ReleasesOnError(t *testing.T) {
 	// If an invalid base is in the list, previously held ports should be released.
 	bases := []int{49152, 80}
-	allocs, err := AllocateMultipleAndHold(bases)
+	allocs, err := AllocateMultipleAndHold(bases, nil)
 	if err == nil {
 		for _, a := range allocs {
 			a.Release()
