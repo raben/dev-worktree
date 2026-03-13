@@ -1,0 +1,47 @@
+version: 2
+
+project_name: dev-worktree
+
+builds:
+  - main: .
+    binary: dev
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/autor-dev/dev-worktree/cmd.version={{.Version}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^ci:"
+
+homebrew_casks:
+  - repository:
+      owner: raben
+      name: homebrew-tap
+    homepage: "https://github.com/raben/dev-worktree"
+    description: "Isolated parallel development environments with worktree + Docker"
+    license: MIT
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/dev"]
+          end

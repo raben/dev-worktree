@@ -1,0 +1,3 @@
+image: golang:1.26
+ports: []
+setup: "apt-get update -qq && apt-get install -y -qq nodejs npm > /dev/null 2>&1 && go mod download"
