@@ -124,24 +124,29 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	// Start container
 	fmt.Printf("Starting container (image: %s)...\n", cfg.Image)
-	containerID, err := dc.Up(ctx, devKey, wtPath, cfg.Image, version, portBindings)
+	result, err := dc.Up(ctx, devKey, wtPath, cfg.Image, version, portBindings)
 	if err != nil {
 		return fmt.Errorf("starting container: %w", err)
 	}
+	containerID := result.ContainerID
 
-	// Install Claude Code
-	fmt.Println("Installing Claude Code...")
-	output, err := dc.Exec(ctx, containerID, []string{"npm", "install", "-g", "@anthropic-ai/claude-code"})
-	if err != nil {
-		return fmt.Errorf("installing Claude Code: %w\n%s", err, output)
-	}
+	if result.Resumed {
+		fmt.Println("Resumed existing container.")
+	} else {
+		// Run setup command first (may install dependencies needed for Claude Code)
+		if cfg.Setup != "" {
+			fmt.Printf("Running setup: %s\n", cfg.Setup)
+			output, err := dc.Exec(ctx, containerID, []string{"sh", "-c", cfg.Setup})
+			if err != nil {
+				return fmt.Errorf("setup command failed: %w\n%s", err, output)
+			}
+		}
 
-	// Run setup command if specified
-	if cfg.Setup != "" {
-		fmt.Printf("Running setup: %s\n", cfg.Setup)
-		output, err := dc.Exec(ctx, containerID, []string{"sh", "-c", cfg.Setup})
+		// Install Claude Code
+		fmt.Println("Installing Claude Code...")
+		output, err := dc.Exec(ctx, containerID, []string{"npm", "install", "-g", "@anthropic-ai/claude-code"})
 		if err != nil {
-			return fmt.Errorf("setup command failed: %w\n%s", err, output)
+			return fmt.Errorf("installing Claude Code: %w\n%s", err, output)
 		}
 	}
 

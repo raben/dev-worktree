@@ -3,11 +3,13 @@ package container
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/image"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 )
@@ -27,31 +29,41 @@ type PortBinding struct {
 	ContainerPort int
 }
 
+// UpResult holds the result of an Up operation.
+type UpResult struct {
+	ContainerID string
+	Resumed     bool // true if an existing stopped container was restarted
+}
+
 // Up creates and starts a container for the given worktree.
 // key is the dev-worktree key (e.g., "myapp/feature-auth"), wtPath is the
-// worktree directory path, image is the Docker image, portBindings maps
+// worktree directory path, img is the Docker image, portBindings maps
 // hostPort to containerPort, and version is the CLI version string.
-// Returns the container ID.
 //
 // If a stopped container already exists for the given key, it is restarted
-// instead of creating a new one.
-func (c *Client) Up(ctx context.Context, key, wtPath, image, version string, portBindings map[int]int) (string, error) {
+// instead of creating a new one (Resumed=true).
+func (c *Client) Up(ctx context.Context, key, wtPath, img, version string, portBindings map[int]int) (*UpResult, error) {
 	// Check for an existing stopped container with this key.
 	existing, err := c.docker.ContainerList(ctx, containertypes.ListOptions{
 		All:     true,
 		Filters: FilterByKey(key),
 	})
 	if err != nil {
-		return "", fmt.Errorf("list existing containers: %w", err)
+		return nil, fmt.Errorf("list existing containers: %w", err)
 	}
 	for _, ctr := range existing {
 		if ctr.State != "running" {
 			// Restart the stopped container.
 			if err := c.docker.ContainerStart(ctx, ctr.ID, containertypes.StartOptions{}); err != nil {
-				return "", fmt.Errorf("restart container: %w", err)
+				return nil, fmt.Errorf("restart container: %w", err)
 			}
-			return ctr.ID, nil
+			return &UpResult{ContainerID: ctr.ID, Resumed: true}, nil
 		}
+	}
+
+	// Pull image if not available locally.
+	if err := c.ensureImage(ctx, img); err != nil {
+		return nil, fmt.Errorf("pulling image: %w", err)
 	}
 
 	containerName := sanitizeName(key)
@@ -69,7 +81,7 @@ func (c *Client) Up(ctx context.Context, key, wtPath, image, version string, por
 
 	resp, err := c.docker.ContainerCreate(ctx,
 		&containertypes.Config{
-			Image:        image,
+			Image:        img,
 			Cmd:          []string{"sleep", "infinity"},
 			Labels:       Labels(key, wtPath, version),
 			WorkingDir:   "/workspace",
@@ -84,14 +96,30 @@ func (c *Client) Up(ctx context.Context, key, wtPath, image, version string, por
 		containerName,
 	)
 	if err != nil {
-		return "", fmt.Errorf("create container: %w", err)
+		return nil, fmt.Errorf("create container: %w", err)
 	}
 
 	if err := c.docker.ContainerStart(ctx, resp.ID, containertypes.StartOptions{}); err != nil {
-		return "", fmt.Errorf("start container: %w", err)
+		return nil, fmt.Errorf("start container: %w", err)
 	}
 
-	return resp.ID, nil
+	return &UpResult{ContainerID: resp.ID, Resumed: false}, nil
+}
+
+// ensureImage pulls the image if it is not available locally.
+func (c *Client) ensureImage(ctx context.Context, img string) error {
+	_, _, err := c.docker.ImageInspectWithRaw(ctx, img)
+	if err == nil {
+		return nil // image exists locally
+	}
+	reader, err := c.docker.ImagePull(ctx, img, image.PullOptions{})
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	// Drain the reader to complete the pull.
+	_, err = io.Copy(io.Discard, reader)
+	return err
 }
 
 // Down stops containers for the given dev key.
