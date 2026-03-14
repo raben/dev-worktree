@@ -1,7 +1,0 @@
-image: node:22-bookworm
-ports: []
-setup: |
-  curl -fsSL https://go.dev/dl/go1.26.1.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xz
-  export PATH=$PATH:/usr/local/go/bin
-  echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
-  cd /workspace && go mod download

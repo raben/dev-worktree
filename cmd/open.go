@@ -4,68 +4,29 @@ import (
 	"fmt"
 
 	"github.com/autor-dev/dev-worktree/internal/browser"
-	"github.com/autor-dev/dev-worktree/internal/container"
-	"github.com/autor-dev/dev-worktree/internal/selector"
+	"github.com/autor-dev/dev-worktree/internal/session"
 	"github.com/spf13/cobra"
 )
 
+var openPort int
+
 var openCmd = &cobra.Command{
-	Use:   "open [name]",
-	Short: "Open the environment's port in a browser",
-	Args:  cobra.MaximumNArgs(1),
+	Use:   "open",
+	Short: "Open a container port in the browser",
+	Args:  cobra.NoArgs,
 	RunE:  runOpen,
 }
 
 func init() {
-	rootCmd.AddCommand(openCmd)
+	openCmd.Flags().IntVarP(&openPort, "port", "p", 3000, "Port to open")
 }
 
 func runOpen(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
-
-	dc, err := container.NewClient()
-	if err != nil {
-		return fmt.Errorf("connecting to Docker: %w", err)
-	}
-	defer dc.Close()
-
-	envs, err := dc.List(ctx)
-	if err != nil {
-		return fmt.Errorf("listing environments: %w", err)
+	if !session.Exists() {
+		return fmt.Errorf("no active session. Run 'dev' first")
 	}
 
-	var devKey string
-	if len(args) > 0 {
-		devKey, err = resolveDevKeyFromName(args[0])
-		if err != nil {
-			return err
-		}
-	} else {
-		devKey, err = selector.Select(envs, "running")
-		if err != nil {
-			return err
-		}
-	}
-
-	// Find the environment
-	var env *container.Environment
-	for i, e := range envs {
-		if e.Key == devKey {
-			env = &envs[i]
-			break
-		}
-	}
-	if env == nil {
-		return fmt.Errorf("environment '%s' not found", devKey)
-	}
-
-	if len(env.Ports) == 0 {
-		return fmt.Errorf("environment '%s' has no exposed ports", devKey)
-	}
-
-	// Open the first port
-	url := fmt.Sprintf("http://localhost:%d", env.Ports[0].HostPort)
+	url := fmt.Sprintf("http://localhost:%d", openPort)
 	fmt.Printf("Opening %s ...\n", url)
-
 	return browser.Open(url)
 }
